@@ -22,6 +22,7 @@ from warden.llm.base import (
     LLMError,
     LLMQuotaExceeded,
     LLMRequest,
+    LLMRequestRejected,
     LLMResponse,
     LLMTransientError,
 )
@@ -118,7 +119,7 @@ class GeminiClient:
                 if wait is not None and wait > MAX_TRANSIENT_WAIT:
                     raise LLMQuotaExceeded(f"quota exhausted, resets in about {wait / 3600:.1f}h: {error}", wait)
                 raise LLMTransientError(error)
-            raise (LLMTransientError if resp.status_code >= 500 else LLMError)(error)
+            raise (LLMTransientError if resp.status_code >= 500 else LLMRequestRejected)(error)
         return self._parse(resp)
 
     @staticmethod

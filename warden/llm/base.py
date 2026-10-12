@@ -34,6 +34,11 @@ class LLMQuotaExceeded(LLMError, PermanentAgentError):
         self.retry_after = retry_after
 
 
+class LLMRequestRejected(LLMError, PermanentAgentError):
+    """The service refused the request itself (bad request, invalid key, billing denied):
+    the same request will be refused again, so it is never retried."""
+
+
 class LLMReplayMiss(LLMError, PermanentAgentError):
     """Replay mode found no recording for this request (no network call is made)."""
 

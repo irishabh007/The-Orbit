@@ -244,6 +244,17 @@ class GeminiClientTests(unittest.TestCase):
         self.assertNotIsInstance(cm.exception, LLMTransientError)
         self.assertIn("bad request", str(cm.exception))
 
+    def test_auth_and_billing_denials_stop_the_run_at_once(self) -> None:
+        # real 403 when billing lapsed: retrying it only adds noise to the audit log
+        for status, msg in ((401, "API key not valid"), (403, "Lightning dunning decision is deny"),
+                            (400, "bad request")):
+            with self.subTest(status=status):
+                fake = FakeGemini(httpx.Response(status, json={"error": {"message": msg}}))
+                with self.assertRaises(PermanentAgentError) as cm:
+                    fake.client().complete(LLMRequest("p"))
+                self.assertIsInstance(cm.exception, LLMError)
+                self.assertIn(msg, str(cm.exception))
+
     def test_blocked_or_empty_response_is_an_error(self) -> None:
         fake = FakeGemini(httpx.Response(200, json={"promptFeedback": {"blockReason": "SAFETY"}}))
         with self.assertRaisesRegex(LLMError, "SAFETY"):

@@ -13,6 +13,7 @@ from warden.llm.base import (
     LLMQuotaExceeded,
     LLMReplayMiss,
     LLMRequest,
+    LLMRequestRejected,
     LLMResponse,
     LLMTransientError,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "LLMQuotaExceeded",
     "LLMReplayMiss",
     "LLMRequest",
+    "LLMRequestRejected",
     "LLMResponse",
     "LLMTransientError",
     "RecordReplayClient",
