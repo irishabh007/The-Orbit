@@ -6,7 +6,8 @@ work, how it is orchestrated, and how the result is validated.
 
 ## 1. Greenfield: URL shortener (recorded)
 
-`python run_demo.py greenfield --auto-approve` builds it as an ASP.NET Core API (recording pending);
+`python run_demo.py greenfield --auto-approve` replays the recorded .NET run (ASP.NET Core minimal API, EF Core + SQLite, xUnit;
+31 tests, passing after 4 repair loops: 3 -> 3 -> 27 -> 30 -> 31);
 `python run_demo.py greenfield-python --auto-approve` replays the recorded run below, made on the Python
 stack with the same brief. The request is in
 [demo/requests/greenfield.md](../demo/requests/greenfield.md): shorten, redirect, analytics, health
@@ -41,12 +42,12 @@ recovered (MTTR is computed from the log), and 6 human decisions in the lineage 
 security/SSRF, rate limiter, JSON logging), 4 test modules, a README and `docs/`, about 1,800 lines
 in one commit whose message lists the requirements and approvals.
 
-## 2. Brownfield: daily click analytics on the existing app (built; recording pending)
+## 2. Brownfield: daily click analytics on the existing app (recorded)
 
-`python run_demo.py brownfield --record --auto-approve` (one-time recording; see
-[RECORDING.md](RECORDING.md)). The request is in
+`python run_demo.py brownfield --auto-approve` replays the recorded .NET run: one repair loop
+(a build error, fixed), then release. To re-record, see [RECORDING.md](RECORDING.md). The request is in
 [demo/requests/brownfield.md](../demo/requests/brownfield.md). The existing code is the real
-greenfield output, frozen in `demo/baselines/url-shortener.json`.
+greenfield output, frozen in `demo/baselines/url-shortener-dotnet.json`.
 
 **Decomposition**
 - `scan` (static analysis with `ast`, nothing executes) builds `codebase.json`: modules, the
@@ -68,7 +69,7 @@ greenfield output, frozen in `demo/baselines/url-shortener.json`.
 gate. Release reviews against the spec and the impact analysis. Tested end to end with scripted
 answers (`tests/test_demo.py::BrownfieldScenarioTests`).
 
-## 3. Ambiguous: "make links safer and give marketing better insights" (built; recording pending)
+## 3. Ambiguous: "make links safer and give marketing better insights" (recorded; ends FAILED)
 
 `python run_demo.py ambiguous` (interactive) or `--auto-approve` (scripted product-owner answers
 from [demo/answers/ambiguous.md](../demo/answers/ambiguous.md)).
@@ -87,6 +88,17 @@ blocking only when a wrong guess would change the API, the data model or the sec
 **Validation:** the same verify and release gates as greenfield. Tested with scripted answers
 (`tests/test_demo.py::AmbiguousScenarioTests`): the second requirements prompt contains the
 human's answers, and the committed spec reflects them.
+
+**Recorded outcome: a safe failure.** Discovery, spec approval and design succeed; the much broader
+spec (SSRF protection, rate limiting, analytics) then needs more repair than the budget allows.
+Verify across the 6 repair loops (vague briefs get 6, others 4): build error -> 1/26 -> build
+error -> 1/26 -> 18/26 -> build error -> 0/26, the last a regression in the tests' host setup
+(a configuration key added twice). The loop budget holds, the run stops `FAILED`, release never
+runs and nothing is published; the audit log and report show every attempt and its feedback.
+The generated tests are also flaky (a SQLite race), so a replay can see slightly different test
+output than the recording: replay then serves the closest recorded answer for that agent and
+marks it `replay-nearest` (2 calls in this run). We kept this run as recorded rather than
+re-rolling it until it passed.
 
 ## 4. New project: your own idea, interactively (.NET by default)
 
