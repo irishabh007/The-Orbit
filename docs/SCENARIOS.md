@@ -6,7 +6,9 @@ work, how it is orchestrated, and how the result is validated.
 
 ## 1. Greenfield: URL shortener (recorded)
 
-`python run_demo.py greenfield --auto-approve`. The request is in
+`python run_demo.py greenfield --auto-approve` builds it as an ASP.NET Core API (recording pending);
+`python run_demo.py greenfield-python --auto-approve` replays the recorded run below, made on the Python
+stack with the same brief. The request is in
 [demo/requests/greenfield.md](../demo/requests/greenfield.md): shorten, redirect, analytics, health
 check, custom aliases, expiry, SSRF protection, rate limiting, persistence.
 

@@ -37,12 +37,27 @@ change to an agent's prompt, schema or inputs makes those calls miss and need re
 Recorded scenarios therefore pin their prompts. Only first prompts are guaranteed stable:
 feedback-only hints and previous outputs appear only when they apply.
 
+## Order for the .NET scenarios
+
+Brownfield extends the real greenfield output, so record in this order:
+
+```bash
+python run_demo.py greenfield --record --auto-approve     # 1. the .NET URL shortener
+python -m demo.baseline runs/greenfield                   # 2. snapshot it as brownfield's existing app
+python run_demo.py brownfield --record --auto-approve     # 3. add daily analytics to it
+python run_demo.py ambiguous --record --auto-approve      # 4. vague request, scripted product-owner answers
+```
+
+Then run steps 2-6 above for each scenario, and commit `recordings/` plus
+`demo/baselines/url-shortener-dotnet.json`.
+
 ## Current status
 
 | Scenario | Recorded |
 |---|---|
-| greenfield | Yes (12 calls, gemini-3.8-flash) |
-| brownfield | No: run steps 1-6 |
-| ambiguous | No: run steps 1-6 (with `--auto-approve`, the scripted product-owner answers are used) |
+| greenfield (.NET) | No: step 1 above |
+| brownfield (.NET) | No: needs the greenfield baseline first (step 2), then step 3 |
+| ambiguous (.NET) | No: step 4 |
+| greenfield-python | Yes (12 calls, gemini-3.8-flash) |
 | failures | Not needed (scripted) |
-| new (.NET) | Recorded automatically to `recordings/<project>/` whenever you run `run_demo.py new` with a key. To make one the showcase .NET demo, keep its brief in a file (`--request-file`) and give the same answers on replay |
+| new | Recorded automatically to `recordings/<project>/` whenever you run it with a key |

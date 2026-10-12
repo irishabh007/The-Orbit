@@ -14,6 +14,7 @@ from demo.newproject import new_project_scenario
 from demo.runner import (
     REQUESTS,
     ROOT,
+    BaselineMissing,
     Scenario,
     load_scenario,
     run_scenario,
@@ -132,8 +133,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             scenario = _new_scenario(args)
             llm, mode = _model(args, scenario.name, record_by_default=True)
         else:
+            try:
+                scenario = load_scenario(args.scenario)
+            except BaselineMissing as exc:
+                raise CliError(str(exc)) from exc
             llm, mode = _model(args, args.scenario)
-            scenario = load_scenario(args.scenario)
         _explain_approvals(scenario, args.auto_approve)
         approver = scenario_approver(scenario, auto=args.auto_approve, name=args.approver)
         result = run_scenario(scenario, args.out / scenario.name, llm, approver, mode=mode)

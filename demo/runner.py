@@ -32,8 +32,8 @@ from warden.models import EventType, RunState
 from warden.orchestrator import Orchestrator, RunSummary
 from warden.policy import YamlPolicy
 from warden.report import write_report
-from warden.stacks import PYTHON, StackProfile
-from warden.tools import GitRepo, VerifyAgent, publish
+from warden.stacks import DOTNET, PYTHON, StackProfile
+from warden.tools import GitRepo, VerifyAgent, collect_bundles, publish
 from warden.tools.git import ANCHOR_TRAILER
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +59,14 @@ class Scenario:
 
 
 # scenario -> (baseline snapshot under demo/baselines, graph); others are greenfield-shaped
-_BROWNFIELD = {"brownfield": ("url-shortener", brownfield_graph)}
+_BROWNFIELD = {"brownfield": ("url-shortener-dotnet", brownfield_graph)}
+# Every scenario builds a .NET product except this one, kept to show the stacks are pluggable
+# (and because its real-model recordings were made with the Python stack).
+_PYTHON_SCENARIOS = {"greenfield-python"}
+
+
+class BaselineMissing(ValueError):
+    """The brownfield scenario needs a snapshot of an existing .NET app first."""
 
 
 @dataclass(frozen=True)
@@ -77,15 +84,33 @@ def load_scenario(name: str) -> Scenario:
         available = sorted(p.stem for p in REQUESTS.glob("*.md"))
         raise ValueError(f"unknown scenario {name!r}; available: {', '.join(available)}")
     request = path.read_text(encoding="utf-8")
+    stack = PYTHON if name in _PYTHON_SCENARIOS else DOTNET
     if name in _BROWNFIELD:
         snapshot, graph = _BROWNFIELD[name]
-        baseline = unpack((BASELINES / f"{snapshot}.json").read_text(encoding="utf-8"))
-        return Scenario(name, request, graph, baseline)
+        baseline_file = BASELINES / f"{snapshot}.json"
+        if not baseline_file.is_file():
+            raise BaselineMissing(
+                f"The brownfield scenario extends an existing .NET app, and {baseline_file} does not exist yet.\n"
+                "Create it from a successful greenfield run:\n"
+                "  python run_demo.py greenfield --record --auto-approve\n"
+                "  python -m demo.baseline runs/greenfield")
+        baseline = unpack(baseline_file.read_text(encoding="utf-8"))
+        return Scenario(name, request, graph, baseline, stack=stack)
     answers_file = ANSWERS / f"{name}.md"
     if answers_file.is_file():  # vague request: a human must review (and can answer) the spec
         return Scenario(name, request, partial(sdlc_graph, require_spec_approval=True),
-                        answers=answers_file.read_text(encoding="utf-8"))
-    return Scenario(name, request)
+                        answers=answers_file.read_text(encoding="utf-8"), stack=stack)
+    return Scenario(name, request, stack=stack)
+
+
+def make_baseline(run_dir: str | Path, name: str = "url-shortener-dotnet") -> Path:
+    """Snapshot a finished run's code, tests and docs as the 'existing app' for brownfield."""
+    store = ArtifactStore(Path(run_dir) / "artifacts")
+    files = collect_bundles(store, PUBLISHED)
+    BASELINES.mkdir(parents=True, exist_ok=True)
+    target = BASELINES / f"{name}.json"
+    target.write_text(pack(files), encoding="utf-8")
+    return target
 
 
 AUTO_APPROVE = ApprovalDecision("approve", "auto-approve", "--auto-approve")

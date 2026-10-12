@@ -7,7 +7,7 @@ Everything runs offline, with no key needed. Setup is the 2-line quick start in 
 ## 1. Watch a governed run (2 min)
 
 ```bash
-python run_demo.py greenfield --auto-approve
+python run_demo.py greenfield-python --auto-approve
 ```
 
 The live feed shows each event as the orchestrator writes it. Look for:
@@ -67,7 +67,7 @@ Each case writes its own `runs/failures/<case>/report.md`.
 ## 4. Be the human (1 min)
 
 ```bash
-python run_demo.py greenfield
+python run_demo.py greenfield-python
 ```
 
 At each gate you can:

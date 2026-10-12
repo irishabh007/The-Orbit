@@ -9,7 +9,9 @@ from unittest import mock
 
 import pytest
 
+from demo import runner
 from demo.console import ConsoleApprover
+from demo.fixtures import DOTNET_ANSWERS, DOTNET_CODE, DOTNET_TESTS, js
 from demo.runner import (
     RUN_MARKER,
     load_scenario,
@@ -17,24 +19,20 @@ from demo.runner import (
     run_scenario,
     scenario_approver,
 )
-from tests.test_agents import CODE, DOCS, REVIEW, TESTS, design, js, spec
+from tests.test_agents import spec
 from warden.approval import ApprovalRequest, ScriptedApprover
+from warden.bundle import pack
 from warden.llm import RecordReplayClient, ScriptedClient
 from warden.models import EventType, RunState
+from warden.stacks import DOTNET, PYTHON
 from warden.tools import Check, CommandResult, GitRepo, VerifyAgent
 
 RECORDINGS = Path(__file__).resolve().parent.parent / "recordings"
 
 
 def scripted_clients() -> dict[str, ScriptedClient]:
-    return {
-        "requirements": ScriptedClient([], default=js(spec())),
-        "architect": ScriptedClient([], default=js(design())),
-        "developer": ScriptedClient([], default=js(CODE)),
-        "tester": ScriptedClient([], default=js(TESTS)),
-        "docs": ScriptedClient([], default=js(DOCS)),
-        "release": ScriptedClient([], default=js(REVIEW)),
-    }
+    """Scripted model answers for every role on the .NET stack (graded scenarios are .NET)."""
+    return {role: ScriptedClient([], default=js(answer)) for role, answer in DOTNET_ANSWERS.items()}
 
 
 def passing_verifier() -> VerifyAgent:
@@ -98,6 +96,18 @@ class RunDirTests(TmpCase):
         self.assertTrue((precious / "thesis.docx").exists())
 
 
+class ScenarioStackTests(unittest.TestCase):
+    def test_graded_scenarios_build_dotnet_products(self) -> None:
+        for name in ("greenfield", "ambiguous"):
+            with self.subTest(scenario=name):
+                self.assertEqual(load_scenario(name).stack, DOTNET)
+
+    def test_recorded_python_run_keeps_its_exact_request(self) -> None:
+        python = load_scenario("greenfield-python")
+        self.assertEqual(python.stack, PYTHON)
+        self.assertEqual(python.request, load_scenario("greenfield").request)  # recordings stay valid
+
+
 class ScenarioTests(TmpCase):
     def test_greenfield_request_is_loaded(self) -> None:
         scenario = load_scenario("greenfield")
@@ -140,11 +150,19 @@ class ScenarioTests(TmpCase):
 
 BROWNFIELD_IMPACT = {
     "summary": "Add daily click analytics.", "change_type": "feature",
-    "affected": [{"target": "app/main.py", "kind": "module", "change": "modify", "reason": "new route"},
+    "affected": [{"target": "src/App/Program.cs", "kind": "module", "change": "modify", "reason": "new route"},
                  {"target": "GET /analytics/{code}/daily", "kind": "endpoint", "change": "add", "reason": "new"}],
     "risk": "medium", "risks": [{"risk": "data migration", "mitigation": "additive table"}],
-    "regression_tests": ["tests/test_api.py"],
+    "regression_tests": ["tests/ShortenerTests.cs"],
 }
+
+
+def fixture_baseline(directory: Path) -> None:
+    """A .NET 'existing app' (the scripted API, tests and README) as the brownfield baseline."""
+    files = {**{f["path"]: f["content"] for f in DOTNET_CODE["files"]},
+             **{f["path"]: f["content"] for f in DOTNET_TESTS["files"]}, "README.md": "# Shortener\n"}
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "url-shortener-dotnet.json").write_text(pack(files), encoding="utf-8")
 
 
 class AmbiguousScenarioTests(TmpCase):
@@ -173,16 +191,37 @@ class AmbiguousScenarioTests(TmpCase):
 
 
 class BrownfieldScenarioTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        fixture_baseline(self.root / "baselines")
+        patcher = mock.patch.object(runner, "BASELINES", self.root / "baselines")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def run_brownfield(self, approver: ScriptedApprover, publish: bool = False):  # type: ignore[no-untyped-def]
         clients = {**scripted_clients(), "impact": ScriptedClient([], default=js(BROWNFIELD_IMPACT))}
         return run_scenario(load_scenario("brownfield"), self.root / "run", clients, approver,
                             verifier=passing_verifier(), publish_repo=publish, out=io.StringIO())
 
-    def test_baseline_is_the_real_greenfield_output(self) -> None:
+    def test_brownfield_is_dotnet_and_reads_the_baseline(self) -> None:
         scenario = load_scenario("brownfield")
         assert scenario.baseline is not None
-        self.assertIn("app/main.py", scenario.baseline)
-        self.assertIn("tests/test_api.py", scenario.baseline)
+        self.assertEqual(scenario.stack, DOTNET)
+        self.assertIn("src/App/Program.cs", scenario.baseline)
+
+    def test_missing_baseline_explains_how_to_create_it(self) -> None:
+        (self.root / "baselines" / "url-shortener-dotnet.json").unlink()
+        with self.assertRaises(runner.BaselineMissing) as cm:
+            load_scenario("brownfield")
+        self.assertIn("python -m demo.baseline", str(cm.exception))
+
+    def test_baseline_is_snapshotted_from_a_finished_run(self) -> None:
+        result = run_scenario(load_scenario("greenfield"), self.root / "gf", scripted_clients(), ScriptedApprover(),
+                              verifier=passing_verifier(), publish_repo=False, out=io.StringIO())
+        (self.root / "baselines" / "url-shortener-dotnet.json").unlink()
+        path = runner.make_baseline(result.run_dir)
+        self.assertIn("src/App/Program.cs", load_scenario("brownfield").baseline or {})
+        self.assertEqual(path.name, "url-shortener-dotnet.json")
 
     def test_brownfield_scans_existing_code_and_gates_the_impact_analysis(self) -> None:
         approver = ScriptedApprover()
@@ -190,14 +229,13 @@ class BrownfieldScenarioTests(TmpCase):
         self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
         self.assertIn("impact", {r.node_id for r in approver.requests})
         codebase = json.loads((result.run_dir / "codebase.json").read_text("utf-8"))
-        self.assertIn("GET /analytics/{code}",
-                      {f"{e['method']} {e['path']}" for e in codebase["endpoints"]})
+        self.assertIn("POST /shorten", {f"{e['method']} {e['path']}" for e in codebase["endpoints"]})
 
     def test_developer_revises_the_existing_code(self) -> None:
         clients = {**scripted_clients(), "impact": ScriptedClient([], default=js(BROWNFIELD_IMPACT))}
         run_scenario(load_scenario("brownfield"), self.root / "run", clients, ScriptedApprover(),
                      verifier=passing_verifier(), publish_repo=False, out=io.StringIO())
-        self.assertIn("def get_analytics", clients["developer"].calls[0].prompt)  # existing app/main.py
+        self.assertIn('app.MapPost("/shorten"', clients["developer"].calls[0].prompt)  # existing Program.cs
 
 
 class CliTests(unittest.TestCase):
@@ -282,7 +320,7 @@ class PublishedRunTests(TmpCase):
                               ScriptedApprover(), verifier=passing_verifier(), out=io.StringIO())
         self.assertIsNotNone(result.commit)
         assert result.repo is not None
-        self.assertTrue((result.repo / "app" / "main.py").exists())
+        self.assertTrue((result.repo / "src" / "App" / "Program.cs").exists())
         self.assertTrue((result.repo / "README.md").exists())
         # the commit anchors the audit log externally, and the report checks the anchor
         ((commit, seq, digest),) = GitRepo(result.repo).audit_anchors()
@@ -295,6 +333,13 @@ class PublishedRunTests(TmpCase):
 
 @pytest.mark.slow
 class PublishedBrownfieldTests(TmpCase):
+    def setUp(self) -> None:
+        super().setUp()
+        fixture_baseline(self.root / "baselines")
+        patcher = mock.patch.object(runner, "BASELINES", self.root / "baselines")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_repo_history_is_baseline_then_feature(self) -> None:
         clients = {**scripted_clients(), "impact": ScriptedClient([], default=js(BROWNFIELD_IMPACT))}
         result = run_scenario(load_scenario("brownfield"), self.root / "run", clients, ScriptedApprover(),
@@ -307,13 +352,13 @@ class PublishedBrownfieldTests(TmpCase):
 
 
 @pytest.mark.slow
-@unittest.skipUnless((RECORDINGS / "greenfield").is_dir(), "no greenfield recordings yet")
+@unittest.skipUnless((RECORDINGS / "greenfield-python").is_dir(), "no greenfield-python recordings")
 class RecordedGreenfieldTests(TmpCase):
     """The committed recordings replay offline to a verified, released URL shortener."""
 
     def test_replay_reaches_release_with_real_tests_passing(self) -> None:
-        llm = RecordReplayClient(RECORDINGS / "greenfield", mode="replay")
-        result = run_scenario(load_scenario("greenfield"), self.root / "run", llm, ScriptedApprover(),
+        llm = RecordReplayClient(RECORDINGS / "greenfield-python", mode="replay")
+        result = run_scenario(load_scenario("greenfield-python"), self.root / "run", llm, ScriptedApprover(),
                               out=io.StringIO())
         self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
         report = json.loads((result.run_dir / "verify_report.json").read_text("utf-8"))
