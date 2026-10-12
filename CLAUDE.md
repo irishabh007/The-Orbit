@@ -7,8 +7,9 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 ## Commands
 - Test: `pytest -q`    Lint: `ruff check .`    Types: `mypy warden demo run_demo.py`
 - Slow tests (real pytest/ruff/git subprocesses): `pytest -q -m slow`
-- All four must pass before any commit. Keep the default suite fast (<2s total) and deterministic;
-  anything that spawns a subprocess gets `@pytest.mark.slow`.
+- All four must pass before any commit. Keep the default suite fast (<5s total; was 2s at 68 tests,
+  raised at ~240 tests to keep full-pipeline tests in it) and deterministic; anything that spawns a
+  subprocess gets `@pytest.mark.slow`.
 
 ## Architecture (read these first)
 - `warden/models.py`      node/run states + the legal transition table (single source of truth)
