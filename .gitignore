@@ -6,3 +6,11 @@ workspace/
 .mypy_cache/
 .ruff_cache/
 runs/
+
+# local build/IDE output if the evidence .NET repo is opened or run
+docs/evidence/**/bin/
+docs/evidence/**/obj/
+docs/evidence/**/.vs/
+docs/evidence/**/Properties/
+docs/evidence/**/*.csproj.user
+docs/evidence/**/*.db
