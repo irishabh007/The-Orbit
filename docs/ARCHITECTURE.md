@@ -111,7 +111,7 @@ stateDiagram-v2
 | Model call | `RetryingClient`: backoff on rate limits, timeouts and 5xx | 4 attempts; a quota longer than 60s is not retried |
 | Agent output | Schema or check errors fed back to the model | 1 repair round |
 | Node | Retry, then the fallback agent | `max_retries` (2), then one fallback |
-| Workflow | Failure routed upstream (verify → developer + tester) | `max_replans` (3) |
+| Workflow | Failure routed upstream (verify → developer + tester) | `max_replans` (4) |
 | Run | Rollback and halt, or safe-stop (kill switch or step budget) | — |
 
 These failures are never retried (CLAUDE.md rule 4):

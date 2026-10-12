@@ -55,7 +55,7 @@ def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: i
     return agents
 
 
-def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 3, require_spec_approval: bool = False) -> Graph:
+def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 4, require_spec_approval: bool = False) -> Graph:
     """Greenfield graph. ``require_spec_approval``: a human signs off the spec (vague requests)."""
     spec, design = "spec.json", "design.json"
     built = ("code.bundle", "tests.bundle", "docs.bundle")
@@ -82,7 +82,7 @@ def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 3, require_spec_
 BASELINE = ("baseline-code.bundle", "baseline-tests.bundle")
 
 
-def brownfield_graph(*, max_retries: int = 2, max_repair_loops: int = 3) -> Graph:
+def brownfield_graph(*, max_retries: int = 2, max_repair_loops: int = 4) -> Graph:
     """Change an existing codebase.
 
     Seed: ``request`` (the change), ``baseline-*.bundle`` (immutable snapshot of the existing
