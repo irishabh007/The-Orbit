@@ -14,6 +14,14 @@ from typing import Protocol
 from warden.artifacts import ArtifactStore
 
 
+class PermanentAgentError(Exception):
+    """Raised by an agent when retrying the same attempt cannot help (e.g. a daily quota).
+
+    The orchestrator fails the node without retries or fallback; any other exception
+    is treated as a normal, retryable failed attempt.
+    """
+
+
 @dataclass
 class AgentResult:
     outputs: dict[str, str | bytes]  # artifact name -> content

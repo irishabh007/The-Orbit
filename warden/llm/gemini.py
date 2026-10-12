@@ -11,16 +11,48 @@ into exceptions, and is hidden from ``repr``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from warden.llm.base import LLMError, LLMRequest, LLMResponse, LLMTransientError
+from warden.llm.base import (
+    LLMError,
+    LLMQuotaExceeded,
+    LLMRequest,
+    LLMResponse,
+    LLMTransientError,
+)
 from warden.llm.env import read_env_value
 
 _OK_FINISH = {None, "STOP", "MAX_TOKENS"}
+MAX_TRANSIENT_WAIT = 60.0  # seconds; a 429 asking us to wait longer is a quota, not a blip
+_RETRY_IN = re.compile(r"retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)", re.IGNORECASE)
+_DURATION_PART = re.compile(r"([\d.]+)([hms])")
+
+
+def _seconds(text: str) -> float | None:
+    parts = _DURATION_PART.findall(text)
+    if not parts:
+        return None
+    return sum(float(n) * {"h": 3600, "m": 60, "s": 1}[unit] for n, unit in parts)
+
+
+def _retry_after(resp: httpx.Response) -> float | None:
+    """Seconds Google asks us to wait: structured RetryInfo first, else the message text."""
+    try:
+        error = resp.json()["error"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    for detail in error.get("details") or []:
+        if isinstance(detail, dict) and str(detail.get("@type", "")).endswith("RetryInfo"):
+            wait = _seconds(str(detail.get("retryDelay", "")))
+            if wait is not None:
+                return wait
+    match = _RETRY_IN.search(str(error.get("message", "")))
+    return _seconds(match.group(1)) if match else None
 
 
 class GeminiClient:
@@ -80,8 +112,12 @@ class GeminiClient:
             raise LLMError(self._scrub(f"gemini request failed: {type(exc).__name__}: {exc}")) from None
         if resp.status_code != 200:
             error = self._scrub(f"gemini HTTP {resp.status_code}: {self._error_message(resp)}")
-            transient = resp.status_code == 429 or resp.status_code >= 500
-            raise (LLMTransientError if transient else LLMError)(error)
+            if resp.status_code == 429:
+                wait = _retry_after(resp)
+                if wait is not None and wait > MAX_TRANSIENT_WAIT:
+                    raise LLMQuotaExceeded(f"quota exhausted, resets in about {wait / 3600:.1f}h: {error}", wait)
+                raise LLMTransientError(error)
+            raise (LLMTransientError if resp.status_code >= 500 else LLMError)(error)
         return self._parse(resp)
 
     @staticmethod

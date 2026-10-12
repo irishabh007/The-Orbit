@@ -12,6 +12,8 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
+from warden.agent import PermanentAgentError
+
 
 class LLMError(Exception):
     """The model call failed and retrying the same request will not help."""
@@ -21,7 +23,18 @@ class LLMTransientError(LLMError):
     """Rate limit, timeout, network or server error: a later retry may succeed."""
 
 
-class LLMReplayMiss(LLMError):
+class LLMQuotaExceeded(LLMError, PermanentAgentError):
+    """Quota exhausted for longer than is worth waiting (e.g. a daily free-tier limit).
+
+    Deliberately NOT transient: retrying before ``retry_after`` seconds only burns attempts.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class LLMReplayMiss(LLMError, PermanentAgentError):
     """Replay mode found no recording for this request (no network call is made)."""
 
 

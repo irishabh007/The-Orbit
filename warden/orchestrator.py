@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from warden.agent import Agent, AgentContext, AgentResult
+from warden.agent import Agent, AgentContext, AgentResult, PermanentAgentError
 from warden.approval import (
     ApprovalDecision,
     ApprovalRequest,
@@ -309,6 +309,9 @@ class Orchestrator:
             return
         try:
             result, ms = fut.result()
+        except PermanentAgentError as exc:  # the agent says retrying cannot help
+            self._fail(nid, f"agent error: {type(exc).__name__}: {exc}", retryable=False)
+            return
         except Exception as exc:  # noqa: BLE001 - agent code is untrusted: any error is a failed attempt
             self._fail(nid, f"agent error: {type(exc).__name__}: {exc}")
             return

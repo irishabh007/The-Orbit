@@ -10,6 +10,7 @@
 from warden.llm.base import (
     LLMClient,
     LLMError,
+    LLMQuotaExceeded,
     LLMReplayMiss,
     LLMRequest,
     LLMResponse,
@@ -23,6 +24,7 @@ from warden.llm.scripted import ScriptedClient
 __all__ = [
     "LLMClient",
     "LLMError",
+    "LLMQuotaExceeded",
     "LLMReplayMiss",
     "LLMRequest",
     "LLMResponse",

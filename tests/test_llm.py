@@ -7,8 +7,10 @@ from typing import Any
 
 import httpx
 
+from warden.agent import PermanentAgentError
 from warden.llm import (
     LLMError,
+    LLMQuotaExceeded,
     LLMReplayMiss,
     LLMRequest,
     LLMResponse,
@@ -172,6 +174,27 @@ class GeminiClientTests(unittest.TestCase):
                 fake = FakeGemini(httpx.Response(status, json={"error": {"message": "try later"}}))
                 with self.assertRaises(LLMTransientError):
                     fake.client().complete(LLMRequest("p"))
+
+    def test_quota_with_a_long_reset_is_permanent_not_retried(self) -> None:
+        # real response from the free tier: retrying for 11 hours only burns attempts
+        msg = ("You exceeded your current quota, please check your plan and billing details.\n"
+               "* Quota exceeded for metric: generate_content_free_tier_requests, limit: 20\n"
+               "Please retry in 11h14m48.594479351s.")
+        fake = FakeGemini(httpx.Response(429, json={"error": {"message": msg}}))
+        with self.assertRaises(LLMQuotaExceeded) as cm:
+            fake.client().complete(LLMRequest("p"))
+        self.assertNotIsInstance(cm.exception, LLMTransientError)
+        self.assertIsInstance(cm.exception, PermanentAgentError)  # the orchestrator will not retry it
+        self.assertEqual(cm.exception.retry_after, 11 * 3600 + 14 * 60 + 48.594479351)
+        self.assertTrue(issubclass(LLMReplayMiss, PermanentAgentError))  # a retry cannot find it either
+
+    def test_short_rate_limits_stay_transient(self) -> None:
+        details = [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17s"}]
+        for body in ({"error": {"message": "Please retry in 26.5s."}},
+                     {"error": {"message": "rate limited", "details": details}},
+                     {"error": {"message": "slow down"}}):
+            with self.subTest(body=body), self.assertRaises(LLMTransientError):
+                FakeGemini(httpx.Response(429, json=body)).client().complete(LLMRequest("p"))
 
     def test_timeouts_and_connection_errors_are_transient(self) -> None:
         for exc in (httpx.ReadTimeout("slow"), httpx.ConnectError("down")):

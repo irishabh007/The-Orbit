@@ -4,7 +4,7 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from warden.agent import AgentContext, AgentResult, FunctionAgent
+from warden.agent import AgentContext, AgentResult, FunctionAgent, PermanentAgentError
 from warden.approval import ApprovalDecision, ScriptedApprover
 from warden.artifacts import ArtifactStore
 from warden.dag import GateResult, Graph, NodeSpec
@@ -146,6 +146,21 @@ class FailureHandlingTests(OrchestratorTestCase):
                 raise RuntimeError("boom")
             return AgentResult({out: "ok"})
         return FunctionAgent("impl", fn)
+
+    def test_permanent_agent_errors_are_not_retried(self) -> None:
+        # e.g. a daily model quota: retrying for hours only burns attempts
+        def impl(ctx: AgentContext) -> AgentResult:
+            with self.lock:
+                self.calls["impl"] += 1
+            raise PermanentAgentError("quota exhausted, resets in 11h")
+
+        agents = self.default_agents()
+        agents["impl"] = FunctionAgent("impl", impl)
+        summary = self.build(agents=agents).run()
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertEqual(self.calls["impl"], 1)
+        self.assertEqual(self.types(EventType.RETRY_SCHEDULED), [])
+        self.assertIn("quota exhausted", summary.reason)
 
     def test_retry_then_success(self) -> None:
         agents = self.default_agents()
