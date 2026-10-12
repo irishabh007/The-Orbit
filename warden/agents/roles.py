@@ -6,10 +6,17 @@ with every task traced to requirement ids and sequenced by ``depends_on``.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from warden.agents.base import BundleAgent, StructuredAgent
-from warden.agents.schemas import Design, FileBundle, ReleaseReview, RequirementsSpec
+from warden.agents.schemas import (
+    Design,
+    FileBundle,
+    ImpactAnalysis,
+    ReleaseReview,
+    RequirementsSpec,
+)
 
 STACK = (
     "Python 3.11+, FastAPI, the standard-library sqlite3 module for storage, pytest with "
@@ -103,6 +110,52 @@ Design the system for `spec.json` and plan the work. Technology constraints: {ST
         return (f"{len(model.components)} components, {len(model.api)} endpoints, "
                 f"{len(model.decisions)} decisions, {len(model.tasks)} tasks "
                 f"({', '.join(f'{n} {o}' for o, n in sorted(owners.items()))}), {len(model.risks)} risks")
+
+
+class ImpactAgent(StructuredAgent[ImpactAnalysis]):
+    """Brownfield: what a change touches in an existing codebase, grounded in codebase.json."""
+
+    name = "impact"
+    schema = ImpactAnalysis
+    output = "impact.json"
+    kind = "analysis"
+    role = ("You are a staff engineer doing change-impact analysis on an existing codebase. You only "
+            "reference modules, endpoints and tests that exist in the scanned codebase, unless you are "
+            "explicitly adding them.")
+    task = """
+Analyse the change requested in `spec.json` against the existing system described by `codebase.json`
+(modules, import graph, reverse dependencies, HTTP endpoints, and which tests cover which modules).
+- affected: every module, endpoint (as "METHOD /path"), data entity, test, doc or config the change touches,
+  with change add/modify/remove and why. Use `dependents` in codebase.json to include indirect impact.
+- risk: low/medium/high, with concrete risks and mitigations (data migration, API compatibility, ...).
+- regression_tests: existing test files that must keep passing.
+- Never mark something as modify/remove unless it exists in codebase.json.
+"""
+
+    def check(self, model: ImpactAnalysis, inputs: dict[str, str]) -> list[str]:
+        raw = inputs.get("codebase.json")
+        if raw is None:
+            return []
+        codebase = json.loads(raw)
+        modules = {m["path"] for m in codebase.get("modules", [])}
+        endpoints = {f"{e['method']} {e['path']}" for e in codebase.get("endpoints", [])}
+        # kinds the scanner can see; data/doc/config are not in codebase.json, so not checked
+        known_by_kind = {"endpoint": endpoints, "module": modules, "test": modules}
+        problems = []
+        for item in model.affected:
+            known = known_by_kind.get(item.kind)
+            if item.change != "add" and known is not None and item.target not in known:
+                problems.append(f"{item.kind} {item.target!r} is marked {item.change} but does not exist "
+                                "in codebase.json (use change 'add' for new things)")
+        problems += [f"regression test {t!r} does not exist in codebase.json"
+                     for t in model.regression_tests if t not in modules]
+        return problems
+
+    def summarize(self, model: ImpactAnalysis) -> str:
+        changes = Counter(i.change for i in model.affected)
+        return (f"{model.change_type}, risk {model.risk}: {len(model.affected)} affected "
+                f"({', '.join(f'{n} {c}' for c, n in sorted(changes.items()))}), "
+                f"{len(model.regression_tests)} regression test file(s). {model.summary}")
 
 
 class DeveloperAgent(BundleAgent):

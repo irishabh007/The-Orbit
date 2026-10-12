@@ -127,6 +127,23 @@ class Design(_Model):
         return self
 
 
+# ------------------------------------------------------------------ brownfield impact
+class ImpactItem(_Model):
+    target: Text  # module/test path ("app/service.py") or endpoint ("GET /analytics/{code}")
+    kind: Literal["module", "endpoint", "data", "test", "doc", "config"]
+    change: Literal["add", "modify", "remove"]
+    reason: Text
+
+
+class ImpactAnalysis(_Model):
+    summary: Text
+    change_type: Literal["feature", "bugfix", "refactor"]
+    affected: Annotated[list[ImpactItem], Field(min_length=1)]
+    risk: Literal["low", "medium", "high"]
+    risks: list[Risk]
+    regression_tests: list[Text]  # existing test files that must still pass
+
+
 # ------------------------------------------------------------------ file bundles
 class SourceFile(_Model):
     path: Text

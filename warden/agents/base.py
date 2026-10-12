@@ -80,7 +80,9 @@ class StructuredAgent(Generic[M]):
     # ---- engine ------------------------------------------------------------
     def run(self, ctx: AgentContext) -> AgentResult:
         inputs = {name: ctx.read_text(name) for name in ctx.consumes}
-        base = self._prompt(inputs, ctx.feedback, self.previous_output(ctx) if ctx.feedback else "")
+        # previous output: after feedback, or existing code in a brownfield run; absent on a first
+        # greenfield run, so those prompts (and their recordings) are unchanged
+        base = self._prompt(inputs, ctx.feedback, self.previous_output(ctx))
         prompt = base
         errors: list[str] = []
         for _ in range(self.repair_attempts + 1):

@@ -12,9 +12,11 @@ from warden.agents import (
     ArchitectAgent,
     DeveloperAgent,
     DocsAgent,
+    ImpactAgent,
     ReleaseAgent,
     RequirementsAgent,
     TesterAgent,
+    brownfield_graph,
     build_agents,
     sdlc_graph,
 )
@@ -255,6 +257,81 @@ class BundleAgentTests(AgentTestCase):
         self.assertIn("APP_MARKER = 1", llm.calls[0].prompt)
 
 
+def impact(**overrides: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "summary": "Add daily click analytics endpoint.",
+        "change_type": "feature",
+        "affected": [
+            {"target": "app/main.py", "kind": "module", "change": "modify", "reason": "new route"},
+            {"target": "GET /analytics/{code}/daily", "kind": "endpoint", "change": "add", "reason": "new API"},
+            {"target": "tests/test_api.py", "kind": "test", "change": "modify", "reason": "cover new route"},
+        ],
+        "risk": "medium",
+        "risks": [{"risk": "slow aggregation", "mitigation": "index on clicked_at"}],
+        "regression_tests": ["tests/test_api.py"],
+    }
+    out.update(overrides)
+    return out
+
+
+class ImpactAgentTests(AgentTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        from warden.tools.scanner import scan_files
+        self.store.put("spec.json", js(spec()))
+        codebase = scan_files({"app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n\n\n"
+                                              "@app.get('/{code}')\ndef redirect(code: str):\n    return code\n",
+                               "tests/test_api.py": "from app.main import app\n"})
+        self.store.put("codebase.json", js(codebase))
+
+    def run_with(self, *outputs: dict[str, Any]) -> Any:
+        return ImpactAgent(ScriptedClient([js(o) for o in outputs])).run(self.ctx("spec.json", "codebase.json"))
+
+    def test_grounded_impact_analysis_is_accepted(self) -> None:
+        result = self.run_with(impact())
+        self.assertEqual(list(result.outputs), ["impact.json"])
+        self.assertIn("risk medium", result.summary)
+        self.assertIn("3 affected", result.summary)
+
+    def test_modifying_a_module_that_does_not_exist_is_rejected(self) -> None:
+        bad = impact()
+        bad["affected"][0]["target"] = "app/ghost.py"
+        with self.assertRaisesRegex(AgentOutputError, "app/ghost.py"):
+            self.run_with(bad, bad)
+
+    def test_modifying_an_unknown_endpoint_or_test_is_rejected(self) -> None:
+        bad = impact(affected=[
+            {"target": "DELETE /links/{code}", "kind": "endpoint", "change": "modify", "reason": "x"},
+            {"target": "tests/test_ghost.py", "kind": "test", "change": "modify", "reason": "y"}])
+        with self.assertRaisesRegex(AgentOutputError, "DELETE /links"):
+            self.run_with(bad, bad)
+
+    def test_adding_new_things_is_allowed(self) -> None:
+        ok = impact(affected=[{"target": "app/analytics.py", "kind": "module", "change": "add", "reason": "new"}])
+        self.run_with(ok)
+
+    def test_regression_tests_must_exist(self) -> None:
+        with self.assertRaisesRegex(AgentOutputError, "tests/test_nope.py"):
+            self.run_with(*[impact(regression_tests=["tests/test_nope.py"])] * 2)
+
+
+class BrownfieldGraphTests(AgentTestCase):
+    def test_brownfield_graph_scans_first_and_gates_impact(self) -> None:
+        graph = brownfield_graph()
+        self.assertEqual(graph.order[0], "scan")
+        self.assertTrue(graph.nodes["impact"].requires_approval)
+        self.assertIn("impact.json", graph.nodes["architect"].consumes)
+        self.assertIn("codebase.json", graph.nodes["requirements"].consumes)
+
+    def test_existing_code_is_shown_to_the_developer_without_feedback(self) -> None:
+        self.store.put("spec.json", js(spec()))
+        self.store.put("design.json", js(design()))
+        self.store.put("code.bundle", pack({"app/main.py": "EXISTING_MARKER = 1\n"}))
+        llm = ScriptedClient([js(CODE)])
+        DeveloperAgent(llm).run(self.ctx("spec.json", "design.json"))
+        self.assertIn("EXISTING_MARKER = 1", llm.calls[0].prompt)
+
+
 class ReleaseAgentTests(AgentTestCase):
     def test_ready_with_failing_check_is_inconsistent(self) -> None:
         bad = copy.deepcopy(REVIEW)
@@ -334,4 +411,5 @@ class PipelineTests(AgentTestCase):
 
     def test_build_agents_accepts_one_shared_client(self) -> None:
         agents = build_agents(ScriptedClient([]))
-        self.assertEqual(set(agents), {n.agent for n in sdlc_graph().nodes.values()})
+        for graph in (sdlc_graph(), brownfield_graph()):
+            self.assertLessEqual({n.agent for n in graph.nodes.values()}, set(agents))

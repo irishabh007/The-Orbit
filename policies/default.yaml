@@ -61,9 +61,11 @@ autonomy:
   roles:
     requirements: full
     architect: supervised   # design decisions need sign-off
+    impact: supervised      # brownfield: a human signs off what a change touches
     planner: full
     developer: full
     tester: full
     verify: full            # runs checks only; produces a report, never code
+    scan: full              # static analysis only; never executes code
     docs: full
     release: supervised     # a human makes the final release call
