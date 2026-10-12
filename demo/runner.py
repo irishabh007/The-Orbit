@@ -48,6 +48,9 @@ ROLES = tuple(cls.name for cls in ROLE_CLASSES)
 PUBLISHED = ("code.bundle", "tests.bundle", "docs.bundle")
 
 
+VAGUE_REPAIR_LOOPS = 6
+
+
 @dataclass(frozen=True)
 class Scenario:
     name: str
@@ -98,7 +101,9 @@ def load_scenario(name: str) -> Scenario:
         return Scenario(name, request, graph, baseline, stack=stack)
     answers_file = ANSWERS / f"{name}.md"
     if answers_file.is_file():  # vague request: a human must review (and can answer) the spec
-        return Scenario(name, request, partial(sdlc_graph, require_spec_approval=True),
+        # a vague brief yields broader scope, so allow more (still bounded) repair loops
+        graph = partial(sdlc_graph, require_spec_approval=True, max_repair_loops=VAGUE_REPAIR_LOOPS)
+        return Scenario(name, request, graph,
                         answers=answers_file.read_text(encoding="utf-8"), stack=stack)
     return Scenario(name, request, stack=stack)
 

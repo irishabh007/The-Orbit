@@ -172,6 +172,11 @@ class AmbiguousScenarioTests(TmpCase):
         self.assertIsNotNone(scenario.answers)
         self.assertTrue(scenario.graph().nodes["requirements"].requires_approval)
 
+    def test_vague_request_gets_a_larger_repair_budget(self) -> None:
+        # broader scope from a vague brief; still bounded
+        self.assertEqual(load_scenario("ambiguous").graph().nodes["verify"].max_replans, 6)
+        self.assertEqual(load_scenario("greenfield").graph().nodes["verify"].max_replans, 4)
+
     def test_questions_are_answered_by_a_human_and_requirements_replan(self) -> None:
         question = {"id": "Q1", "question": "What does 'safer' mean?", "why_it_matters": "scope",
                     "blocking": True, "proposed_default": "SSRF protection only"}
