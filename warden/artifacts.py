@@ -14,7 +14,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import os
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from warden.eventlog import utc_now
+from warden.fsutil import atomic_write
 
 
 @dataclass(frozen=True)
@@ -63,9 +63,8 @@ class ArtifactStore:
 
     def _save(self) -> None:
         payload = {n: [asdict(a) for a in vs] for n, vs in self._index.items()}
-        tmp = self._index_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self._index_path)  # atomic: never leaves a half-written index
+        # atomic: never leaves a half-written index
+        atomic_write(self._index_path, json.dumps(payload, indent=2, sort_keys=True))
 
     # ---- writing -------------------------------------------------------
     def put(

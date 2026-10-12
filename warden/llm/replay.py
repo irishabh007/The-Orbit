@@ -14,12 +14,12 @@ never credentials. Replay makes demos reproducible, not the model.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
 from warden.eventlog import utc_now
+from warden.fsutil import atomic_write
 from warden.llm.base import LLMClient, LLMReplayMiss, LLMRequest, LLMResponse
 
 Mode = Literal["replay", "record", "auto"]
@@ -56,6 +56,5 @@ class RecordReplayClient:
         self.directory.mkdir(parents=True, exist_ok=True)
         payload = {"key": request.key(), "recorded_at": utc_now(),
                    "request": asdict(request), "response": asdict(response)}
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, path)  # atomic: a crash never leaves a half-written recording
+        # atomic: a crash never leaves a half-written recording
+        atomic_write(path, json.dumps(payload, indent=2, sort_keys=True))

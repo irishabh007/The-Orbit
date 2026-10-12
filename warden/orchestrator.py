@@ -14,7 +14,6 @@ Design rules (see CLAUDE.md):
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from collections.abc import Iterable
@@ -33,6 +32,7 @@ from warden.approval import (
 from warden.artifacts import ArtifactStore
 from warden.dag import Graph
 from warden.eventlog import EventLog
+from warden.fsutil import atomic_write
 from warden.models import EventType, NodeState, RunState, assert_transition
 from warden.policy import AllowAllPolicy, Policy
 
@@ -459,9 +459,7 @@ class Orchestrator:
                        "held": r.held, "committed": r.committed, "last_event": r.last_event,
                        "replans": r.replans}
                    for i, r in self._rec.items()}
-        tmp = self._state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self._state_path)
+        atomic_write(self._state_path, json.dumps(payload, indent=2, sort_keys=True))
 
     def _load(self) -> None:
         if self._state_path is None or not self._state_path.exists():
