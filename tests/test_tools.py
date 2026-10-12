@@ -164,6 +164,40 @@ class VerifyAgentTests(TmpCase):
         tail = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))["checks"][0]["output_tail"]
         self.assertEqual(tail, "Time Elapsed <t>\nFailed!  - Total: 3, Duration: <t>")
 
+    def test_dotnet_failures_are_digested_from_trx_grouped_by_error(self) -> None:
+        # found by the first real .NET run: quiet console output listed 28 failing test names but
+        # no error messages, so the agents were asked to fix failures they could not see
+        from warden.tools.verify import dotnet_test_digest
+
+        def trx(results: list[tuple[str, str, str]]) -> str:
+            rows = "".join(
+                f'<UnitTestResult testName="{name}" outcome="{outcome}">'
+                + (f"<Output><ErrorInfo><Message>{msg}</Message><StackTrace>   at Tests.Fixture.Ctor() in "
+                   f"{self.root}/tests/Fixture.cs:line 12\n   at Other()</StackTrace></ErrorInfo></Output>"
+                   if outcome == "Failed" else "") + "</UnitTestResult>"
+                for name, outcome, msg in results)
+            return ('<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>'
+                    f"{rows}</Results></TestRun>")
+
+        rows = [(f"T{i}", "Failed", "Class fixture had unresolved constructor arguments") for i in range(3)]
+        rows += [("T9", "Failed", "Expected 201 but was 500"), ("OK", "Passed", "")]
+        results_dir = self.root / "tests" / "TestResults"
+        results_dir.mkdir(parents=True)
+        (results_dir / "results.trx").write_text(trx(rows), encoding="utf-8")
+        digest = dotnet_test_digest(CommandResult(("dotnet", "test"), 1, "noise [FAIL] noise", 5), self.root)
+        self.assertIn("5 total, 1 passed, 4 failed", digest)
+        self.assertIn("3 test(s): Class fixture had unresolved constructor arguments", digest)
+        self.assertIn("first: T0", digest)
+        self.assertIn("Fixture.cs:line 12", digest)
+        self.assertNotIn("noise", digest)
+        self.assertLess(digest.index("unresolved constructor"), digest.index("Expected 201"))  # most frequent first
+        (results_dir / "results.trx").write_text(trx(list(reversed(rows))), encoding="utf-8")
+        self.assertEqual(digest, dotnet_test_digest(CommandResult(("dotnet", "test"), 1, "", 5), self.root))
+
+    def test_digest_falls_back_to_console_output_without_results(self) -> None:
+        from warden.tools.verify import dotnet_test_digest
+        self.assertEqual(dotnet_test_digest(CommandResult(("dotnet", "test"), 1, "crash", 5), self.root), "crash")
+
     def test_long_output_is_truncated_to_the_tail(self) -> None:
         runner = FakeRunner(1, output="x" * 10_000 + "THE END")
         report = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))

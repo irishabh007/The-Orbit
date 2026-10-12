@@ -13,10 +13,11 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from warden.agent import AgentContext, AgentResult
 from warden.dag import GateResult
@@ -57,9 +58,66 @@ class Check:
     # regex the output must match for the check to pass (exit code 0 alone can be a false green,
     # e.g. `dotnet test` exits 0 when nothing was built or run)
     requires: str | None = None
+    # turns the raw result into the feedback agents read (e.g. a structured test-results digest);
+    # None = the console output itself
+    digest: Callable[[CommandResult, Path], str] | None = None
 
     def passed(self, result: CommandResult) -> bool:
         return result.ok and (self.requires is None or re.search(self.requires, result.output) is not None)
+
+    def feedback(self, result: CommandResult, cwd: Path) -> str:
+        return self.digest(result, cwd) if self.digest is not None else result.output
+
+
+_MAX_GROUPS = 8
+
+
+_Row = tuple[str, str, str, str]  # (outcome, test name, first message line, first stack frame)
+
+
+def _trx_rows(trx: Path) -> list[_Row]:
+    rows = []
+    for element in ElementTree.parse(trx).getroot().iter():
+        if element.tag.rsplit("}", 1)[-1] != "UnitTestResult":
+            continue
+        texts = {child.tag.rsplit("}", 1)[-1]: child.text or "" for child in element.iter()}
+        message_lines = texts.get("Message", "").strip().splitlines()
+        frame = next((ln.strip() for ln in texts.get("StackTrace", "").splitlines() if ":line " in ln), "")
+        rows.append((element.get("outcome", ""), element.get("testName", "?"),
+                     message_lines[0][:300] if message_lines else "", frame))
+    return rows
+
+
+def _format_digest(rows: list[_Row]) -> str:
+    failed = sorted((r for r in rows if r[0] == "Failed"), key=lambda r: r[1])
+    lines = [f"Tests: {len(rows)} total, {sum(r[0] == 'Passed' for r in rows)} passed, {len(failed)} failed."]
+    groups: dict[str, list[_Row]] = {}
+    for row in failed:
+        groups.setdefault(row[2] or "(no message)", []).append(row)
+    if groups:
+        lines.append("Failures grouped by error (most frequent first):")
+    for message, members in sorted(groups.items(), key=lambda g: (-len(g[1]), g[0]))[:_MAX_GROUPS]:
+        lines.append(f"- {len(members)} test(s): {message}")
+        lines.append(f"    first: {members[0][1]}" + (f"\n    {members[0][3]}" if members[0][3] else ""))
+    if len(groups) > _MAX_GROUPS:
+        lines.append(f"... and {len(groups) - _MAX_GROUPS} more distinct error(s)")
+    return "\n".join(lines)
+
+
+def dotnet_test_digest(result: CommandResult, cwd: Path) -> str:
+    """Failures from the TRX results file, grouped by error, most frequent first.
+
+    Quiet console output names failing tests but not why they failed; TRX carries the error
+    message and stack trace. Sorted and timing-free, so the same failures always produce the
+    same text (replay stays deterministic). Falls back to the console output if there is no
+    readable TRX (for example the test host crashed).
+    """
+    trx_files = sorted(cwd.glob("**/TestResults/*.trx"))
+    try:
+        rows = [row for trx in trx_files for row in _trx_rows(trx)]
+    except ElementTree.ParseError:
+        return result.output
+    return _format_digest(rows) if trx_files else result.output
 
 
 DEFAULT_CHECKS = (
@@ -94,7 +152,7 @@ class VerifyAgent:
                 results.append({"name": check.name, "command": " ".join(check.argv[1:] or check.argv),
                                 "passed": check.passed(res), "returncode": res.returncode,
                                 "timed_out": res.timed_out,
-                                "output_tail": normalize_output(res.output, scratch)[-_TAIL:]})
+                                "output_tail": normalize_output(check.feedback(res, scratch), scratch)[-_TAIL:]})
         passed = all(r["passed"] for r in results)
         report = {"passed": passed, "files": len(files), "checks": results}
         ok = sum(r["passed"] for r in results)

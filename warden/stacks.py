@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from warden.tools.scanner import scan_csharp, scan_files
-from warden.tools.verify import DEFAULT_CHECKS, Check
+from warden.tools.verify import DEFAULT_CHECKS, Check, dotnet_test_digest
 
 
 class StackError(ValueError):
@@ -147,8 +147,10 @@ DOTNET = StackProfile(
         # building the test project builds the API project it references; errors only = signal
         Check("build", ("dotnet", "build", "tests", "--nologo", "-v", "q", "-clp:ErrorsOnly")),
         # `dotnet test` exits 0 when nothing ran, so require evidence that tests actually ran
-        Check("tests", ("dotnet", "test", "tests", "--no-build", "--nologo", "-v", "q"),
-              requires=r"Total:\s*[1-9]"),
+        # TRX gives each failure's message and stack trace; the digest groups them for the agents
+        Check("tests", ("dotnet", "test", "tests", "--no-build", "--nologo", "-v", "q",
+                        "--logger", "trx;LogFileName=results.trx"),
+              requires=r"Total:\s*[1-9]", digest=dotnet_test_digest),
     ),
     scan=scan_csharp,
     syntax_check=None,  # no C# parser in the standard library; `dotnet build` reports syntax errors
