@@ -25,7 +25,7 @@ _OK_FINISH = {None, "STOP", "MAX_TOKENS"}
 
 class GeminiClient:
     name = "gemini"
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.8-flash"
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(
