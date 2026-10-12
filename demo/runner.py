@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,10 +62,16 @@ def prepare_run_dir(path: str | Path) -> Path:
     if run_dir.exists():
         if not (run_dir / RUN_MARKER).exists() and any(run_dir.iterdir()):
             raise ValueError(f"{run_dir} exists and was not created by run_demo.py; refusing to delete it")
-        shutil.rmtree(run_dir)
+        shutil.rmtree(run_dir, onerror=_make_writable_and_retry)
     run_dir.mkdir(parents=True)
     (run_dir / RUN_MARKER).write_text("Created by run_demo.py; safe to delete.\n", encoding="utf-8")
     return run_dir
+
+
+def _make_writable_and_retry(func: Callable[[str], object], path: str, _exc: object) -> None:
+    """Git marks object files read-only; Windows will not delete those until they are writable."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 def run_scenario(

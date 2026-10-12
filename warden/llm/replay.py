@@ -40,6 +40,7 @@ class RecordReplayClient:
         self.mode = mode
         self._seen: Counter[str] = Counter()
         self._lock = threading.Lock()
+        self.used: set[Path] = set()  # recordings read or written this session (for pruning)
 
     def _path(self, request: LLMRequest) -> Path:
         """The n-th identical request in this client's lifetime has its own recording.
@@ -57,6 +58,7 @@ class RecordReplayClient:
     def complete(self, request: LLMRequest) -> LLMResponse:
         path = self._path(request)
         if self.mode != "record" and path.exists():
+            self.used.add(path)
             recorded = json.loads(path.read_text("utf-8"))["response"]
             return LLMResponse(recorded["text"], recorded["model"], self.name,
                                recorded.get("input_tokens"), recorded.get("output_tokens"))
@@ -64,6 +66,7 @@ class RecordReplayClient:
             raise LLMReplayMiss(f"no recording for request {request.key()[:12]} in {self.directory}")
         response = self.inner.complete(request)  # errors propagate and are never recorded
         self._write(path, request, response)
+        self.used.add(path)
         return response
 
     def _write(self, path: Path, request: LLMRequest, response: LLMResponse) -> None:

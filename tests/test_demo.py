@@ -1,5 +1,6 @@
 import io
 import json
+import stat
 import tempfile
 import unittest
 from collections.abc import Sequence
@@ -52,6 +53,16 @@ class RunDirTests(TmpCase):
         (run_dir / "old.txt").write_text("x", encoding="utf-8")
         prepare_run_dir(self.root / "r")
         self.assertFalse((run_dir / "old.txt").exists())
+
+    def test_previous_run_with_read_only_files_is_replaced(self) -> None:
+        # git marks its object files read-only; on Windows plain rmtree cannot delete them
+        run_dir = prepare_run_dir(self.root / "r")
+        locked = run_dir / "repo" / ".git" / "objects" / "ab" / "cdef"
+        locked.parent.mkdir(parents=True)
+        locked.write_text("x", encoding="utf-8")
+        locked.chmod(stat.S_IREAD)
+        prepare_run_dir(self.root / "r")
+        self.assertFalse(locked.exists())
 
     def test_refuses_to_wipe_a_directory_it_did_not_create(self) -> None:
         precious = self.root / "precious"

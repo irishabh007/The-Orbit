@@ -132,6 +132,13 @@ class RecordReplayTests(unittest.TestCase):
         key = LLMRequest("q").key()
         self.assertEqual(sorted(p.stem for p in self.dir.glob("*.json")), [key, f"{key}-1"])
 
+    def test_tracks_which_recordings_a_run_used(self) -> None:
+        RecordReplayClient(self.dir, ScriptedClient(["a", "b"]), mode="auto").complete(LLMRequest("used"))
+        RecordReplayClient(self.dir, ScriptedClient(["c"]), mode="auto").complete(LLMRequest("stale"))
+        replay = RecordReplayClient(self.dir, mode="replay")
+        replay.complete(LLMRequest("used"))
+        self.assertEqual({p.name for p in replay.used}, {f"{LLMRequest('used').key()}.json"})
+
     def test_errors_are_not_recorded(self) -> None:
         inner = ScriptedClient([LLMTransientError("busy")])
         with self.assertRaises(LLMTransientError):
