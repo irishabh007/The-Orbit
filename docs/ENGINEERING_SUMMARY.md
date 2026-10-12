@@ -97,8 +97,9 @@ Two principles shaped most decisions:
   delete them.
 - **Contract mismatches:** when tests and code disagree, verify sends both back. A genuinely wrong
   test can use up the repair loops and halt the run for a human.
-- **Model usage not in the audit log:** tokens and cost per call are in the recordings but not yet
-  in the event log, so the report has no cost metric.
+- **Cost is an estimate:** every model call's tokens are logged and priced at list price
+  (`warden/llm/pricing.py`). The committed greenfield recordings predate thinking-token capture, so
+  their reported cost (~$0.39) understates the real bill; new recordings include thinking tokens.
 
 ## Lessons from real runs
 

@@ -167,6 +167,17 @@ class RecordReplayTests(unittest.TestCase):
 
 
 class GeminiClientTests(unittest.TestCase):
+    def test_thinking_tokens_are_captured_and_survive_replay(self) -> None:
+        body = gemini_ok("x")
+        body["usageMetadata"]["thoughtsTokenCount"] = 40
+        resp = FakeGemini(httpx.Response(200, json=body)).client().complete(LLMRequest("p"))
+        self.assertEqual(resp.thinking_tokens, 40)
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder = RecordReplayClient(tmp, FakeGemini(httpx.Response(200, json=body)).client(), mode="record")
+            recorder.complete(LLMRequest("p"))
+            replayed = RecordReplayClient(tmp, mode="replay").complete(LLMRequest("p"))
+        self.assertEqual((replayed.input_tokens, replayed.output_tokens, replayed.thinking_tokens), (7, 3, 40))
+
     def test_sends_request_with_key_in_header_not_url(self) -> None:
         fake = FakeGemini(httpx.Response(200, json=gemini_ok("hi there")))
         resp = fake.client(model="gemini-test").complete(

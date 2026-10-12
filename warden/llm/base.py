@@ -58,6 +58,7 @@ class LLMResponse:
     backend: str  # "gemini" | "replay" | "scripted"
     input_tokens: int | None = None
     output_tokens: int | None = None
+    thinking_tokens: int | None = None  # billed as output by thinking models
 
 
 class LLMClient(Protocol):

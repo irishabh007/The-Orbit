@@ -29,8 +29,9 @@ from warden.llm.env import read_env_value
 
 _OK_FINISH = {None, "STOP", "MAX_TOKENS"}
 MAX_TRANSIENT_WAIT = 60.0  # seconds; a 429 asking us to wait longer is a quota, not a blip
-_RETRY_IN = re.compile(r"retry in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)", re.IGNORECASE)
-_DURATION_PART = re.compile(r"([\d.]+)([hms])")
+# bounded repeats: linear time even on a hostile or garbled error message
+_RETRY_IN = re.compile(r"retry in ((?:\d{1,6}h)?(?:\d{1,6}m)?(?:\d{1,9}(?:\.\d{1,12})?s)?)", re.IGNORECASE)
+_DURATION_PART = re.compile(r"(\d{1,9}(?:\.\d{1,12})?)([hms])")
 
 
 def _seconds(text: str) -> float | None:
@@ -145,5 +146,5 @@ class GeminiClient:
         if not text:
             raise LLMError("gemini returned empty text")
         usage = data.get("usageMetadata") or {}
-        return LLMResponse(text, self.model, self.name,
-                           usage.get("promptTokenCount"), usage.get("candidatesTokenCount"))
+        return LLMResponse(text, self.model, self.name, usage.get("promptTokenCount"),
+                           usage.get("candidatesTokenCount"), usage.get("thoughtsTokenCount"))

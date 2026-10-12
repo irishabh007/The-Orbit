@@ -24,6 +24,7 @@ from typing import Any
 
 from warden.dag import Graph
 from warden.eventlog import Event, EventLog, VerifyResult
+from warden.llm.pricing import estimate_cost
 from warden.models import EventType
 
 _E = EventType
@@ -109,6 +110,44 @@ def compute_metrics(events: Sequence[Event]) -> dict[str, Any]:
                    "rules": dict(sorted(rules.items()))},
         "nodes": nodes,
         "events": len(events),
+        "model_usage": _model_usage([e for e in by_type[_E.NOTE.value] if "model_usage" in e.data]),
+    }
+
+
+def _call_cost(call: dict[str, Any]) -> float | None:
+    return estimate_cost(str(call.get("model")), call.get("input_tokens") or 0, call.get("output_tokens") or 0,
+                         call.get("thinking_tokens") or 0)
+
+
+def _usage_totals(calls: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    costs = [_call_cost(c) for c in calls]
+    priced = [c for c in costs if c is not None]
+    return {
+        "calls": len(calls),
+        "input_tokens": sum(c.get("input_tokens") or 0 for c in calls),
+        "output_tokens": sum(c.get("output_tokens") or 0 for c in calls),
+        "thinking_tokens": sum(c.get("thinking_tokens") or 0 for c in calls),
+        # a node's cost is unknown if any of its calls is unpriced; the run total sums what is priced
+        "cost_usd": round(sum(priced), 4) if len(priced) == len(costs) else None,
+        "priced_cost_usd": round(sum(priced), 4),
+        "unpriced_calls": len(costs) - len(priced),
+    }
+
+
+def _model_usage(notes: Sequence[Event]) -> dict[str, Any]:
+    """Tokens and estimated cost, total and per node, from the scheduler's ``model_usage`` notes."""
+    per_node: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in notes:
+        per_node[event.node_id or "?"].extend(event.data.get("model_usage", []))
+    every = [c for calls in per_node.values() for c in calls]
+    total = _usage_totals(every)
+    total["cost_usd"] = total.pop("priced_cost_usd")
+    return {
+        **total,
+        "models": sorted({str(c.get("model")) for c in every}),
+        "calls_without_thinking_count": sum(c.get("thinking_tokens") is None for c in every),
+        "by_node": {node: {k: v for k, v in _usage_totals(calls).items() if k != "priced_cost_usd"}
+                    for node, calls in per_node.items()},
     }
 
 
@@ -163,6 +202,7 @@ def render_report(events: Sequence[Event], metrics: dict[str, Any], *, graph: Gr
     sections = [
         _summary(metrics),
         _reliability(metrics),
+        _usage(metrics),
         _workflow(metrics, graph),
         _timeline(events),
         _approvals(metrics),
@@ -200,6 +240,25 @@ def _reliability(m: dict[str, Any]) -> list[str]:
         ("Audit events", _fmt(m["events"])),
     ]
     return ["", "## Reliability metrics", "", *_table(("Metric", "Value"), rows)]
+
+
+def _usage(m: dict[str, Any]) -> list[str]:
+    u = m["model_usage"]
+    out = ["", "## Model usage and cost", ""]
+    if not u["calls"]:
+        return [*out, "No model calls were made (scripted or tool-only run)."]
+    rows = [(node, b["calls"], f"{b['input_tokens']:,}", f"{b['output_tokens']:,}", f"{b['thinking_tokens']:,}",
+             "n/a" if b["cost_usd"] is None else f"${b['cost_usd']:.4f}") for node, b in u["by_node"].items()]
+    rows.append(("**total**", u["calls"], f"{u['input_tokens']:,}", f"{u['output_tokens']:,}",
+                 f"{u['thinking_tokens']:,}", f"${u['cost_usd']:.4f}"))
+    out += _table(("Node", "Calls", "Input tokens", "Output tokens", "Thinking tokens", "Est. cost"), rows)
+    notes = [f"Models: {', '.join(u['models'])}. Cost estimated at list prices in `warden/llm/pricing.py`."]
+    if u["unpriced_calls"]:
+        notes.append(f"{u['unpriced_calls']} call(s) used a model without a listed price and are not in the total.")
+    if u["calls_without_thinking_count"]:
+        notes.append(f"{u['calls_without_thinking_count']} call(s) have no thinking-token count (recorded before "
+                     "it was captured), so their cost is understated.")
+    return [*out, "", *notes]
 
 
 def _workflow(m: dict[str, Any], graph: Graph | None) -> list[str]:

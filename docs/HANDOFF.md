@@ -67,8 +67,7 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
    on Windows, and tool output in repair prompts may differ on Linux or with newer packages. If it
    misses, consider `-p no:warnings` for verify's pytest and re-record (this invalidates repair-loop
    recordings).
-3. Optional improvements: tokens and cost per model call in the event log (a cost metric in the
-   report); container sandbox for verify; deleting files
+3. Optional improvements: container sandbox for verify; deleting files
    in the generated repo.
 
 Constraint for whoever continues: **changing any agent prompt, schema, input or verify output

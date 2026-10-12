@@ -310,11 +310,15 @@ class Orchestrator:
         try:
             result, ms = fut.result()
         except PermanentAgentError as exc:  # the agent says retrying cannot help
+            self._log_usage(nid, getattr(exc, "usage", None))
             self._fail(nid, f"agent error: {type(exc).__name__}: {exc}", retryable=False)
             return
         except Exception as exc:  # noqa: BLE001 - agent code is untrusted: any error is a failed attempt
+            self._log_usage(nid, getattr(exc, "usage", None))
             self._fail(nid, f"agent error: {type(exc).__name__}: {exc}")
             return
+        if isinstance(result, AgentResult):
+            self._log_usage(nid, result.usage)
         if not isinstance(result, AgentResult):
             self._fail(nid, "agent returned an invalid result")
             return
@@ -368,6 +372,11 @@ class Orchestrator:
                 self._fail(nid, f"changes requested by {decision.approver}: {decision.comment}")
                 return
         self._commit(nid, result, ms)
+
+    def _log_usage(self, nid: str, usage: Any) -> None:
+        """Model calls an attempt spent (tokens, latency), success or not; feeds cost metrics."""
+        if isinstance(usage, list) and usage:
+            self._log(EventType.NOTE, nid, {"model_usage": usage}, self._own(nid))
 
     def _commit(self, nid: str, result: AgentResult, duration_ms: int) -> None:
         spec, rec = self.graph.nodes[nid], self._rec[nid]

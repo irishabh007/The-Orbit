@@ -110,6 +110,34 @@ class AgentTestCase(unittest.TestCase):
         return AgentContext("run1", "n1", 1, self.store, consumes, feedback)
 
 
+class MeteredClient:
+    """Answers from a script and reports token usage, like a real backend."""
+
+    name = "metered"
+
+    def __init__(self, *answers: str) -> None:
+        self.answers = list(answers)
+
+    def complete(self, request: Any) -> Any:
+        from warden.llm import LLMResponse
+        return LLMResponse(self.answers.pop(0), "gemini-3.8-flash", "gemini", 1000, 200, 300)
+
+
+class UsageTests(AgentTestCase):
+    def test_every_model_call_is_reported_including_repair_rounds(self) -> None:
+        bad = spec(requirements=[])  # fails the schema once, then repaired
+        result = RequirementsAgent(MeteredClient(js(bad), js(spec()))).run(self.ctx("request"))
+        self.assertEqual(len(result.usage), 2)
+        self.assertEqual(result.usage[0], {"model": "gemini-3.8-flash", "backend": "gemini", "input_tokens": 1000,
+                                           "output_tokens": 200, "thinking_tokens": 300,
+                                           "ms": result.usage[0]["ms"]})
+
+    def test_usage_is_kept_when_the_agent_gives_up(self) -> None:
+        with self.assertRaises(AgentOutputError) as cm:
+            RequirementsAgent(MeteredClient("junk", "junk")).run(self.ctx("request"))
+        self.assertEqual(len(cm.exception.usage), 2)  # spent tokens are still accounted for
+
+
 class StructuredOutputTests(AgentTestCase):
     def test_valid_output_becomes_canonical_json_artifact(self) -> None:
         result = RequirementsAgent(ScriptedClient([js(spec())])).run(self.ctx("request"))

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from warden.artifacts import ArtifactStore
 
@@ -30,6 +30,9 @@ class AgentResult:
     # Non-empty = the agent asks for a human (e.g. blocking questions). Agents can only
     # ask for MORE oversight: an empty value never skips a required approval.
     escalate: str = ""
+    # one entry per model call made for this result (model, backend, tokens, ms); the scheduler
+    # logs it. An exception may carry the same list as ``usage`` so spent tokens are not lost.
+    usage: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

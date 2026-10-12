@@ -10,8 +10,9 @@ of the inputs, feedback and previous errors, so record/replay is deterministic.
 from __future__ import annotations
 
 import json
+import time
 from functools import cache
-from typing import ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -32,6 +33,10 @@ def _schema_text(schema: type[BaseModel]) -> str:
 
 class AgentOutputError(Exception):
     """The model's output stayed invalid after the allowed repair rounds."""
+
+    def __init__(self, message: str, usage: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage or []  # model calls already spent; the orchestrator still logs them
 
 
 def strip_fences(text: str) -> str:
@@ -85,15 +90,21 @@ class StructuredAgent(Generic[M]):
         base = self._prompt(inputs, ctx.feedback, self.previous_output(ctx))
         prompt = base
         errors: list[str] = []
+        usage: list[dict[str, Any]] = []
         for _ in range(self.repair_attempts + 1):
+            t0 = time.monotonic()
             response = self.llm.complete(LLMRequest(prompt, system=self.role, json_mode=True))
+            usage.append({"model": response.model, "backend": response.backend,
+                          "input_tokens": response.input_tokens, "output_tokens": response.output_tokens,
+                          "thinking_tokens": response.thinking_tokens,
+                          "ms": int((time.monotonic() - t0) * 1000)})
             model, errors = self._parse(response.text, inputs)
             if model is not None:
                 return AgentResult(self.render(model), kind=self.kind, summary=self.summarize(model),
-                                   escalate=self.escalation(model))
+                                   escalate=self.escalation(model), usage=usage)
             prompt = base + self._repair_section(response.text, errors)
         raise AgentOutputError(f"{self.name}: invalid output after {self.repair_attempts + 1} "
-                               f"attempt(s): {'; '.join(errors[:5])}")
+                               f"attempt(s): {'; '.join(errors[:5])}", usage)
 
     def _parse(self, text: str, inputs: dict[str, str]) -> tuple[M | None, list[str]]:
         try:

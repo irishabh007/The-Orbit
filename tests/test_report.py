@@ -92,6 +92,25 @@ class MetricsTests(ReportTestCase):
         self.assertEqual((m["recoveries"], m["unrecovered"], m["mttr_s"]), (0, 1, None))
 
 
+class UsageMetricsTests(unittest.TestCase):
+    def test_tokens_and_cost_per_node_at_list_price(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = EventLog(Path(tmp) / "e.jsonl", clock=TickClock())
+            call = {"model": "gemini-3.8-flash", "backend": "gemini", "input_tokens": 1_000_000,
+                    "output_tokens": 100_000, "thinking_tokens": 100_000, "ms": 1500}
+            log.append("r", "NOTE", "orchestrator", "dev", {"model_usage": [call, call]})
+            log.append("r", "NOTE", "orchestrator", "qa", {"model_usage": [{**call, "model": "unknown-model"}]})
+            usage = compute_metrics(log.read_all())["model_usage"]
+            log.close()
+        self.assertEqual(usage["calls"], 3)
+        self.assertEqual(usage["input_tokens"], 3_000_000)
+        # dev: 2 x (1M in at $0.75 + 0.2M out+thinking at $3.75) = 2 x 1.50 = 3.00; unknown model is unpriced
+        self.assertEqual(usage["by_node"]["dev"]["cost_usd"], 3.0)
+        self.assertIsNone(usage["by_node"]["qa"]["cost_usd"])
+        self.assertEqual(usage["cost_usd"], 3.0)
+        self.assertEqual(usage["unpriced_calls"], 1)
+
+
 class RenderTests(ReportTestCase):
     def setUp(self) -> None:
         super().setUp()

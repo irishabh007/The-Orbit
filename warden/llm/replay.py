@@ -60,8 +60,8 @@ class RecordReplayClient:
         if self.mode != "record" and path.exists():
             self.used.add(path)
             recorded = json.loads(path.read_text("utf-8"))["response"]
-            return LLMResponse(recorded["text"], recorded["model"], self.name,
-                               recorded.get("input_tokens"), recorded.get("output_tokens"))
+            return LLMResponse(recorded["text"], recorded["model"], self.name, recorded.get("input_tokens"),
+                               recorded.get("output_tokens"), recorded.get("thinking_tokens"))
         if self.inner is None:
             raise LLMReplayMiss(f"no recording for request {request.key()[:12]} in {self.directory}")
         response = self.inner.complete(request)  # errors propagate and are never recorded

@@ -3,6 +3,7 @@ import threading
 import unittest
 from collections import Counter
 from pathlib import Path
+from typing import ClassVar
 
 from warden.agent import AgentContext, AgentResult, FunctionAgent, PermanentAgentError
 from warden.approval import ApprovalDecision, ScriptedApprover
@@ -330,6 +331,33 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertEqual(len(approver.requests), 1)
         self.assertIn("2 blocking questions", approver.requests[0].reason)
         self.assertIsNone(self.store.latest("spec"))
+
+
+class ModelUsageTests(OrchestratorTestCase):
+    CALL: ClassVar[dict[str, object]] = {"model": "gemini-3.8-flash", "backend": "gemini", "input_tokens": 10,
+                                         "output_tokens": 5,
+                                         "thinking_tokens": 0, "ms": 3}
+
+    def usage_events(self) -> list:  # type: ignore[type-arg]
+        return [e for e in self.types(EventType.NOTE) if "model_usage" in e.data]
+
+    def test_usage_from_a_result_is_logged_by_the_scheduler(self) -> None:
+        agents = self.default_agents()
+        agents["impl"] = FunctionAgent("impl", lambda ctx: AgentResult({"code": "x"}, usage=[self.CALL]))
+        self.build(agents=agents).run()
+        (event,) = self.usage_events()
+        self.assertEqual((event.node_id, event.data["model_usage"]), ("impl", [self.CALL]))
+
+    def test_usage_carried_by_a_failure_is_logged_too(self) -> None:
+        def impl(ctx: AgentContext) -> AgentResult:
+            exc = RuntimeError("invalid output twice")
+            exc.usage = [self.CALL, self.CALL]  # type: ignore[attr-defined]
+            raise exc
+
+        agents = self.default_agents()
+        agents["impl"] = FunctionAgent("impl", impl)
+        self.build(agents=agents).run()
+        self.assertEqual(sum(len(e.data["model_usage"]) for e in self.usage_events()), 6)  # 3 attempts x 2
 
 
 class RepairLoopTests(OrchestratorTestCase):
