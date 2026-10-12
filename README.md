@@ -10,17 +10,30 @@ exit gates, parallel branches with joins, human approval checkpoints, bounded re
 rollback, safe-stop, policy guardrails, re-planning when upstream outputs change, and a
 hash-chained audit log from which every reported metric is computed.
 
-## Quick start (offline, no API key)
+> The GitHub repository is named **The-Orbit**; the project inside it is **Warden**.
+
+## Quick start (no API key needed)
+
+The scenarios replay recorded model answers, so no API key or model calls are needed.
+**Requirements:** Python 3.11+. The .NET scenarios also need the
+[.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) and, on their first run, network
+access so `dotnet` can restore NuGet packages. Without .NET, start with the Python stack.
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-demo.txt -r requirements-dev.txt
-python run_demo.py greenfield --auto-approve         # recorded .NET run, replayed offline (needs the .NET SDK)
-python run_demo.py greenfield-python --auto-approve  # same brief on the Python stack
-python run_demo.py failures                          # 8 governance demos: retry, rollback, policy, re-plan...
-python run_demo.py new                               # your own idea -> Q&A -> approved spec -> .NET API (needs a key)
+python run_demo.py failures                          # 8 governance demos (scripted, no model): retry, rollback, policy, re-plan...
+python run_demo.py greenfield-python --auto-approve  # recorded run on the Python stack; needs only Python
+python run_demo.py greenfield --auto-approve         # recorded .NET run (needs the .NET 10 SDK)
+python run_demo.py new                               # your own idea -> Q&A -> approved spec -> .NET API (needs a Gemini key)
 pytest -q && pytest -q -m slow                       # 311 fast tests + 11 subprocess tests
 ```
+
+**Recorded vs scripted.** `greenfield`, `brownfield`, `ambiguous` (.NET) and `greenfield-python`
+replay real gemini-3.8-flash sessions; the verify step really builds and tests the generated code
+each time. `failures` uses scripted agents so each failure path is shown deterministically.
+`new` calls the model live. `--auto-approve` stands in for the human at every gate; leave it out to
+decide yourself.
 
 Each run prints a live event feed and writes `runs/<scenario>/report.md`, which includes
 reliability metrics, model usage and cost, a Mermaid workflow diagram, a timeline, approvals,
