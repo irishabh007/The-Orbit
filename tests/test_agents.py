@@ -2,6 +2,7 @@ import copy
 import json
 import tempfile
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from warden.llm import LLMError, ScriptedClient
 from warden.models import RunState
 from warden.orchestrator import Orchestrator
 from warden.policy import YamlPolicy
+from warden.tools import Check, CommandResult, VerifyAgent
 
 DEFAULT_POLICY = Path(__file__).resolve().parent.parent / "policies" / "default.yaml"
 
@@ -258,7 +260,8 @@ class ReleaseAgentTests(AgentTestCase):
 class PipelineTests(AgentTestCase):
     """All six agents through the real orchestrator, default policy, scripted humans."""
 
-    def run_pipeline(self, approver: ScriptedApprover, req_answers: list[str]) -> Any:
+    def run_pipeline(self, approver: ScriptedApprover, req_answers: list[str],
+                     verify_codes: tuple[int, ...] = ()) -> Any:
         clients = {
             "requirements": ScriptedClient(req_answers),
             "architect": ScriptedClient([], default=js(design())),
@@ -267,18 +270,35 @@ class PipelineTests(AgentTestCase):
             "docs": ScriptedClient([], default=js(DOCS)),
             "release": ScriptedClient([], default=js(REVIEW)),
         }
+        codes = list(verify_codes)
+
+        def runner(argv: Sequence[str], cwd: Path, timeout: float) -> CommandResult:
+            return CommandResult(tuple(argv), codes.pop(0) if codes else 0, "FAILED test_r1 - KeyError", 1)
+
         log = EventLog(self.root / "events.jsonl")
         self.addCleanup(log.close)
-        orch = Orchestrator(sdlc_graph(), build_agents(clients), self.store, log, "run1",
+        agents = build_agents(clients, verifier=VerifyAgent((Check("tests", ("pytest",)),), runner=runner))
+        orch = Orchestrator(sdlc_graph(), agents, self.store, log, "run1",
                             policy=YamlPolicy.from_file(DEFAULT_POLICY), approver=approver)
         return orch.run(), clients
+
+    def test_failed_verification_sends_developer_back_with_the_failure(self) -> None:
+        summary, clients = self.run_pipeline(ScriptedApprover(), [js(spec())], verify_codes=(1, 0))
+        self.assertEqual(summary.state, RunState.SUCCEEDED, summary.reason)
+        developer_prompts = [c.prompt for c in clients["developer"].calls]
+        self.assertEqual(len(developer_prompts), 2)
+        self.assertIn("FAILED test_r1 - KeyError", developer_prompts[1])
+        self.assertEqual(len(clients["tester"].calls), 1)
+        report = self.store.latest("verify_report.json")
+        assert report is not None
+        self.assertTrue(json.loads(self.store.read_text(report))["passed"])
 
     def test_greenfield_pipeline_runs_end_to_end_with_human_gates(self) -> None:
         approver = ScriptedApprover()
         summary, _ = self.run_pipeline(approver, [js(spec())])
         self.assertEqual(summary.state, RunState.SUCCEEDED, summary.reason)
         for name in ("spec.json", "design.json", "code.bundle", "tests.bundle", "docs.bundle",
-                     "release_review.json"):
+                     "verify_report.json", "release_review.json"):
             self.assertIsNotNone(self.store.latest(name), name)
         gated = {r.node_id for r in approver.requests}
         # architect + release always; developer because requirements.txt is a protected path

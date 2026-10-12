@@ -1,6 +1,8 @@
 """SDLC agents and the standard workflow graph.
 
-    requirements -> architect (approval) -> developer | tester | docs -> release (approval)
+    requirements -> architect (approval) -> developer | tester | docs
+                 developer + tester -> verify (runs tests + lint; on failure re-plans developer)
+                 verify + docs -> release (approval)
 
 Agents are adapters: this package may use Pydantic (CLAUDE.md rule 7). Approval on
 architect and release is set on the graph itself, so it holds even without a policy;
@@ -24,20 +26,23 @@ from warden.agents.roles import (
 )
 from warden.dag import Graph, NodeSpec
 from warden.llm import LLMClient
+from warden.tools import REPORT, VerifyAgent, verify_gate
 
 ROLE_CLASSES = (RequirementsAgent, ArchitectAgent, DeveloperAgent, TesterAgent, DocsAgent, ReleaseAgent)
 
 
-def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: int = 1) -> dict[str, Agent]:
+def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: int = 1,
+                 verifier: VerifyAgent | None = None) -> dict[str, Agent]:
     """One agent per role. Pass one client for all roles, or a mapping role -> client."""
     agents: dict[str, Agent] = {}
     for cls in ROLE_CLASSES:
         client = llm[cls.name] if isinstance(llm, Mapping) else llm
         agents[cls.name] = cls(client, repair_attempts=repair_attempts)
+    agents["verify"] = verifier or VerifyAgent()
     return agents
 
 
-def sdlc_graph(*, max_retries: int = 2) -> Graph:
+def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 2) -> Graph:
     spec, design = "spec.json", "design.json"
     built = ("code.bundle", "tests.bundle", "docs.bundle")
     return Graph([
@@ -49,7 +54,11 @@ def sdlc_graph(*, max_retries: int = 2) -> Graph:
         NodeSpec("tester", "tester", ("architect",), (spec, design), ("tests.bundle",),
                  max_retries=max_retries),
         NodeSpec("docs", "docs", ("architect",), (spec, design), ("docs.bundle",), max_retries=max_retries),
-        NodeSpec("release", "release", ("developer", "tester", "docs"), (spec, design, *built),
+        # failing tests are deterministic: no blind retry, send the output back to the developer
+        NodeSpec("verify", "verify", ("developer", "tester"), ("code.bundle", "tests.bundle"), (REPORT,),
+                 exit_gate=verify_gate, max_retries=0, on_failure_replan=("developer",),
+                 max_replans=max_repair_loops),
+        NodeSpec("release", "release", ("verify", "docs"), (spec, design, *built, REPORT),
                  ("release_review.json",), requires_approval=True, max_retries=max_retries),
     ])
 

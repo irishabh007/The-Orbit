@@ -64,5 +64,6 @@ autonomy:
     planner: full
     developer: full
     tester: full
+    verify: full            # runs checks only; produces a report, never code
     docs: full
     release: supervised     # a human makes the final release call

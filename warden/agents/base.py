@@ -101,7 +101,8 @@ class StructuredAgent(Generic[M]):
         for name, content in inputs.items():
             parts.append(f"## {name}\n{self._show(name, content)}")
         if feedback:
-            parts.append("# Human feedback (must be addressed)\n" + feedback.strip())
+            parts.append("# Feedback from a human reviewer or a failed verification (must be addressed)\n"
+                         + feedback.strip())
         schema = _schema_text(self.schema)
         parts.append("# Output format\nRespond with ONE JSON object that validates against this "
                      "JSON Schema. No prose and no markdown fences.\n" + schema)

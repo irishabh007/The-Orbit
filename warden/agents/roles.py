@@ -182,7 +182,8 @@ class ReleaseAgent(StructuredAgent[ReleaseReview]):
     role = ("You are a release reviewer. You check delivered artifacts against the requirements and report "
             "evidence. You recommend; a human makes the final release decision.")
     task = """
-Review every input against `spec.json`.
+Review every input against `spec.json`. `verify_report.json` holds the real test and lint results:
+use it as the evidence for anything about tests passing.
 - checklist: one item per 'must' requirement (plus key risks) with status pass, fail or unknown and
   concrete evidence (file, function and test names).
 - Use unknown when the evidence is not in the inputs; never guess.

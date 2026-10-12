@@ -61,12 +61,20 @@ orchestrator can start from any point (brownfield).
   only add oversight); answers come back as 'changes' feedback
 - `bundle.py`: code/tests/docs travel as one `*.bundle` artifact (safe relative paths only); the
   policy engine expands bundles so secrets/dependency/protected-path rules see every file
+- `tools/`: `write_files` (workspace only, refuses `.git/` and paths escaping via symlinks);
+  `run_command` (timeout, allowlisted environment so generated code never sees keys);
+  `VerifyAgent` + `verify_gate` (pytest + ruff on a scratch copy of code + tests bundles);
+  `GitRepo` (init, commit, revert, log) and `publish()` (approved bundles -> one commit per
+  feature, run after the orchestrator succeeds, never by an agent)
+- Failure-driven re-planning: `NodeSpec.on_failure_replan` / `max_replans`. When verify fails,
+  its output becomes the developer's feedback and the developer plus everything below it re-run
+  (bounded; never for policy denials or human rejections). Graph: developer + tester -> verify
+  -> release (with docs)
 - `orchestrator.py`: parallel scheduling with joins, retry -> fallback -> rollback, approvals,
   safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
   brownfield entry, persistence/resume
 
-**Known gaps:** agents never run against a real model yet
-(no recordings); generated files are not yet written to disk or executed (item 5); no CLI; no report/metrics; no docs beyond this.
+**Known gaps:** agents never run against a real model yet (no recordings); no CLI / `run_demo.py`; no report/metrics; no docs beyond this.
 
 ## 4. Remaining work, in priority order
 
@@ -81,7 +89,8 @@ Each item is done only when a test demonstrates it.
 4. ~~**Agents**~~ Done (`warden/agents/`): Requirements (vague text -> numbered requirements, acceptance
    criteria, assumptions, clarifying questions), Architect (needs approval), Planner, Developer,
    Tester, Docs, Release reviewer (human makes the final call). Strict Pydantic output schemas.
-5. **Tools:** sandboxed file writer (workspace only, protected paths), git adapter (commit per
+5. ~~**Tools**~~ Done for greenfield; AST scanner moved to item 6 (brownfield), mypy on generated
+   code and a separate secret scanner deferred (policy already scans every file). Was: file writer (workspace only, protected paths), git adapter (commit per
    feature, revert), test runner, ruff/mypy gate, secret scanner, AST codebase scanner (modules,
    endpoints, imports) for brownfield impact analysis.
 6. **Demo entry point** `run_demo.py` and the three scenarios:
@@ -111,15 +120,19 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - Policy secret scanning is regex-based: it catches common key formats and literal credential
   assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
   `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
-- Test suite runs at about 2.1s on the dev laptop (Windows), just over the 2s budget (pydantic import
-  ~0.2s, orchestrator state saves ~1.2s); per-file I/O
-  (state saves on every transition) dominates. `EventLog` keeps its append handle open, so callers
-  must `close()` it (or use `with`) when done
+- Default test suite runs at about 1.9s on the dev laptop (Windows), at the 2s budget; subprocess
+  tests live in `pytest -m slow`. Only persistence tests write orchestrator state to disk.
+  `EventLog` keeps its append handle open, so callers must `close()` it (or use `with`) when done
 - Recordings are keyed on the request only, not the model: a recording made with one Gemini model
   replays under another (the recording file names the model that produced it)
 - LLM calls are not yet in the event log (tokens, latency, backend); deferred to the improvement pass
-- Tester writes tests from the design in parallel with the Developer (contract-first). Mismatches are
-  only caught when the verify step runs both (item 5), which must route failures back to the developer
+- Tester writes tests from the design in parallel with the Developer (contract-first). When they
+  disagree, verify always sends the developer back (tests are treated as the contract); a wrong
+  test therefore exhausts the repair loops and halts the run for a human
+- Generated code runs with the user's permissions (scrubbed environment and timeout, not a sandbox;
+  no Docker on the dev machine). Verify runs in Warden's interpreter, so the allowlisted packages
+  (fastapi, httpx, ...) must be installed there: item 6 adds a requirements file for the demo
+- Agents cannot delete files from the generated repo (publish only writes and overwrites)
 
 ## 6. Assessment alignment (update with every item)
 
@@ -136,7 +149,8 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 | 4b. Sequential + parallel paths with synchronization | done | barrier and join tests in `test_orchestrator.py` | |
 | 4c. Cross-stage context and decision lineage | done | artifact input hashes, `caused_by` lineage tests | |
 | 4d. Human approval for high-impact actions | done | `approval.py`; node, policy and agent escalation tests | Interactive CLI approver (item 6) |
-| 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests` | Failure demo (item 6) |
+| 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests`; feature rollback = `git revert` (`test_tools.py`, slow) | Failure demo (item 6) |
+| 4e+. Non-linear recovery (failure routed back upstream) | done | `RepairLoopTests`; pipeline test: failed verify re-runs developer with the test output | Shown in greenfield demo (item 6) |
 | 4f. Policy guardrails: security | done | secrets + dependency allowlist, `test_policy.py` | Secret scanner tool on files (item 5) |
 | 4f. Policy guardrails: change control | done | protected paths + autonomy levels, `test_policy.py` | |
 | 4f. Policy guardrails: compliance | **gap** | only indirect (tamper-evident audit log, recorded approvals) | Decide an explicit compliance rule (e.g. PII in code/fixtures, license allowlist, required release sign-off) |
@@ -144,8 +158,8 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 | 4h. Metrics: success rate, retry/rollback frequency, MTTR, end-to-end latency | todo | raw data already in events (`duration_ms`, retries, rollbacks) | Compute in run report (item 7) |
 | 4i. Dynamic re-planning on upstream change | done | `replan()`, stale-input discard tests | Ambiguous scenario shows it (item 6) |
 | 4j. Controlled agent autonomy | done | autonomy `full`/`supervised`/`none` per role | |
-| 5. Production-quality generated code, API/schema, tests, docs | partial | Developer/Tester/Docs agents emit validated bundles; Architect emits the API/schema | Write to disk, run tests + lint, real-model output (items 5-6) |
-| 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults | Risks/trade-offs write-up (item 8) |
+| 5. Production-quality generated code, API/schema, tests, docs | partial | agents emit validated bundles; verify runs the generated tests + ruff; publish commits a normal git repo | Real-model output (item 6) |
+| 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults, verify gate, scrubbed env for generated code | Risks/trade-offs write-up (item 8) |
 | 7. Humans own oversight, approvals, final quality | done | fail-closed approver; approval on architect + release in the graph; Release agent only recommends | |
 | 8. Final engineering summary | todo | | item 8 |
 | Deliverable: runnable end-to-end prototype | todo | | `run_demo.py` (item 6), CI proof (item 9) |
