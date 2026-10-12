@@ -55,7 +55,9 @@ a gate to see what you are approving). For a guided 10-minute tour, see
 | `run_demo.py new` | **Your own idea**, interactively: type it (or `--request-file`), answer clarifying questions one at a time, approve the readable spec (then locked) and plan; Warden builds an ASP.NET Core API + xUnit tests, verified with `dotnet build`/`dotnet test`; nothing outside the approved plan lands without your approval | Live Gemini, recorded for replay |
 | `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change, human rollback of a shipped feature, resume mid-graph from existing artifacts | Scripted (no model needed) |
 
-Details for each scenario are in [docs/SCENARIOS.md](docs/SCENARIOS.md).
+Details for each scenario are in [docs/SCENARIOS.md](docs/SCENARIOS.md). The unedited output of the three
+recorded .NET runs (reports, audit logs, specs, designs, the generated repo, the brownfield diff) is in
+[docs/evidence/](docs/evidence/).
 
 ## Technology of generated projects
 
@@ -86,6 +88,7 @@ For `--record` and `--live`, put `GEMINI_API_KEY=...` in `.env` (the file is git
 | [Walkthrough](docs/WALKTHROUGH.md) | A 10-minute guided tour mapped to the evaluation criteria |
 | [Architecture](docs/ARCHITECTURE.md) | Components, orchestration model, control flow, governance, key decisions |
 | [Scenarios](docs/SCENARIOS.md) | Decomposition, orchestration and validation for each scenario |
+| [Evidence](docs/evidence/) | Reports, audit logs and generated code from the three recorded .NET runs |
 | [Testing](docs/TESTING.md) | Testing approach, how to run it, what each layer proves |
 | [Engineering summary](docs/ENGINEERING_SUMMARY.md) | Plan and rationale, artifacts, risks and trade-offs, assumptions, limitations, lessons from real runs |
 | [Recording runbook](docs/RECORDING.md) | Recording the remaining scenarios with a paid key |

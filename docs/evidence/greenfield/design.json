@@ -1,0 +1,376 @@
+{
+  "overview": "A high-performance, secure URL shortener service built with ASP.NET Core minimal APIs on .NET 10 and Entity Framework Core with SQLite. The service provisions auto-generated base62 codes and custom aliases with optional expiration, redirects callers using HTTP 307 to preserve analytics telemetry, and provides real-time click metrics and health checks. Strict pre-shortening SSRF validation blocks private/loopback network targets, and IP-based rate limiting prevents spam and DoS.",
+  "components": [
+    {
+      "name": "AppDbContext",
+      "responsibility": "Configures EF Core model mappings, entity constraints (unique code index, default UTC conversions), and manages SQLite persistence for short links.",
+      "module": "src/App/Data/AppDbContext.cs"
+    },
+    {
+      "name": "ShortLink",
+      "responsibility": "Represents the persisted domain entity for a shortened link, storing code, target URL, creation time, expiration time, click count, and last visited time.",
+      "module": "src/App/Data/ShortLink.cs"
+    },
+    {
+      "name": "UrlValidationService",
+      "responsibility": "Validates incoming URLs against strict criteria: ensures HTTP/HTTPS schemes and resolves hostnames via DNS to detect and reject private, loopback, link-local, or multicast IPs to prevent SSRF.",
+      "module": "src/App/Services/UrlValidationService.cs"
+    },
+    {
+      "name": "CodeGeneratorService",
+      "responsibility": "Generates cryptographically secure, random 7-character Base62 alphanumeric codes and validates user-supplied custom aliases against format rules.",
+      "module": "src/App/Services/CodeGeneratorService.cs"
+    },
+    {
+      "name": "LinkService",
+      "responsibility": "Coordinates URL validation, alias collisions, code generation, link creation, expiration checks, redirect lookups, click increments, and analytics retrieval.",
+      "module": "src/App/Services/LinkService.cs"
+    },
+    {
+      "name": "RateLimitingConfiguration",
+      "responsibility": "Configures ASP.NET Core built-in sliding or fixed window rate limiting per client IP for the POST /shorten endpoint, emitting HTTP 429 and Retry-After headers.",
+      "module": "src/App/Middleware/RateLimitingConfiguration.cs"
+    },
+    {
+      "name": "LinkEndpoints",
+      "responsibility": "Defines Minimal API route mappings for POST /shorten, GET /{code}, GET /analytics/{code}, and GET /health with parameter bindings, status codes, and error formatting.",
+      "module": "src/App/Endpoints/LinkEndpoints.cs"
+    },
+    {
+      "name": "Contracts",
+      "responsibility": "Declares strongly typed request and response DTOs: ShortenRequest, ShortenResponse, AnalyticsResponse, HealthResponse, and ErrorResponse.",
+      "module": "src/App/Models/Contracts.cs"
+    },
+    {
+      "name": "Program",
+      "responsibility": "Bootstraps dependency injection, EF Core SQLite connection, rate limiting middleware, routing, database migration on startup, and exposes partial class Program for testing.",
+      "module": "src/App/Program.cs"
+    },
+    {
+      "name": "CustomWebApplicationFactory",
+      "responsibility": "Configures WebApplicationFactory for end-to-end integration tests using an isolated in-memory or temporary SQLite database instance.",
+      "module": "tests/CustomWebApplicationFactory.cs"
+    },
+    {
+      "name": "ShortenEndpointTests",
+      "responsibility": "Tests creation of shortened links with auto-generated codes, custom aliases, alias conflict handling (HTTP 409), and SSRF validation errors (HTTP 400).",
+      "module": "tests/ShortenEndpointTests.cs"
+    },
+    {
+      "name": "RedirectEndpointTests",
+      "responsibility": "Tests GET /{code} redirection (HTTP 307), Location headers, 404 responses for non-existent or expired links, and click metric updates.",
+      "module": "tests/RedirectEndpointTests.cs"
+    },
+    {
+      "name": "AnalyticsAndHealthTests",
+      "responsibility": "Tests GET /analytics/{code} data accuracy (clicks, created_at, last_visited_at) and GET /health status under operational and simulated failure states.",
+      "module": "tests/AnalyticsAndHealthTests.cs"
+    },
+    {
+      "name": "RateLimitingAndPersistenceTests",
+      "responsibility": "Tests client IP rate limiting limits (HTTP 429) and verifies data persistence across host restarts.",
+      "module": "tests/RateLimitingAndPersistenceTests.cs"
+    }
+  ],
+  "api": [
+    {
+      "method": "POST",
+      "path": "/shorten",
+      "summary": "Create a shortened link with an auto-generated code or custom alias and optional expiration timestamp.",
+      "status_codes": [
+        201,
+        400,
+        409,
+        429
+      ],
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R4",
+        "R7",
+        "R8"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/{code}",
+      "summary": "Redirect client to the original target URL if active and not expired, incrementing click statistics.",
+      "status_codes": [
+        307,
+        404
+      ],
+      "requirement_ids": [
+        "R3",
+        "R4"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/{code}",
+      "summary": "Retrieve visit statistics, creation time, and last visited timestamp for a short code.",
+      "status_codes": [
+        200,
+        404
+      ],
+      "requirement_ids": [
+        "R5"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "summary": "Check operational status of the service and backing SQLite database.",
+      "status_codes": [
+        200,
+        503
+      ],
+      "requirement_ids": [
+        "R6"
+      ]
+    }
+  ],
+  "data_model": [
+    {
+      "name": "ShortLink",
+      "fields": [
+        "int Id (Primary Key, Autoincrement)",
+        "string Code (Unique Index, MaxLength 64, Required)",
+        "string OriginalUrl (Required, Unlimited Length)",
+        "DateTime CreatedAt (UTC, Required)",
+        "DateTime? ExpiresAt (UTC, Nullable)",
+        "long ClickCount (Default 0, Required)",
+        "DateTime? LastVisitedAt (UTC, Nullable)"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Use HTTP 307 Temporary Redirect for link resolution",
+      "choice": "Return HTTP 307 Temporary Redirect with the target URL in the Location header.",
+      "rationale": "HTTP 301 is aggressively and permanently cached by user agents, which prevents subsequent clicks from contacting the server and skews analytics tracking. HTTP 307 guarantees every visit reaches the service while maintaining the HTTP method.",
+      "alternatives": [
+        "HTTP 301 Moved Permanently (cached by browsers, breaks click tracking)",
+        "HTTP 302 Found (may inadvertently alter HTTP POST methods to GET in older clients)"
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "Synchronous DNS resolution for pre-shorten SSRF mitigation",
+      "choice": "Perform IP address parsing and DNS lookup using Dns.GetHostAddressesAsync during POST /shorten to block loopback, link-local, private IPv4 (RFC 1918), and private IPv6 ranges.",
+      "rationale": "Protects internal infrastructure, cloud metadata endpoints (e.g., 169.254.169.254), and local developer services from server-side request forgery before persisting any link.",
+      "alternatives": [
+        "Regex/Prefix matching on host strings only (fails when public domain names resolve to private IP addresses)",
+        "Validating on redirect execution (too late, creates open redirect / SSRF vector at execution time)"
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "ASP.NET Core Built-in Partitioned Rate Limiter for abuse mitigation",
+      "choice": "Use ASP.NET Core RateLimiter middleware configured with a FixedWindowRateLimiter partitioned by RemoteIpAddress.",
+      "rationale": "Built directly into .NET without external dependencies or Redis requirements, natively outputs 429 Too Many Requests and Retry-After headers, and fulfills R8 cleanly.",
+      "alternatives": [
+        "Third-party AspNetCoreRateLimit package (external dependency, unnecessary complexity on .NET 10)",
+        "Custom middleware with ConcurrentDictionary (reinventing built-in framework features)"
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "Retain expired link metadata for analytics access while disabling redirection",
+      "choice": "Keep expired ShortLink records in the SQLite database; return 404 on GET /{code} when DateTime.UtcNow > ExpiresAt, but permit GET /analytics/{code} to return historical visit metrics.",
+      "rationale": "Prevents alias hijacking, preserves historical analytics reporting, and complies with acceptance criteria requiring GET /{code} to return 404 after expiration without dropping data.",
+      "alternatives": [
+        "Hard-delete expired records on expiration check (erases all analytics and allows immediate alias hijacking)",
+        "Return 410 Gone for GET /{code} (acceptance criteria R4 specifically requires HTTP 404 Not Found)"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Initialize project structure, dependencies, and configuration",
+      "owner": "developer",
+      "requirement_ids": [
+        "R9",
+        "R10"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T2",
+      "title": "Define domain models, DTO contracts, and EF Core AppDbContext with SQLite",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R9"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Implement UrlValidationService with SSRF private/loopback IP protections",
+      "owner": "developer",
+      "requirement_ids": [
+        "R7"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Implement CodeGeneratorService and custom alias validator",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Implement LinkService business logic (create, redirect, expiry, analytics)",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R9"
+      ],
+      "depends_on": [
+        "T2",
+        "T3",
+        "T4"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Configure per-IP rate limiting middleware in RateLimitingConfiguration",
+      "owner": "developer",
+      "requirement_ids": [
+        "R8"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Implement Minimal API endpoints and Health check in LinkEndpoints and Program.cs",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T5",
+        "T6"
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Set up CustomWebApplicationFactory and test infrastructure in tests/Tests.csproj",
+      "owner": "tester",
+      "requirement_ids": [
+        "R10"
+      ],
+      "depends_on": [
+        "T7"
+      ]
+    },
+    {
+      "id": "T9",
+      "title": "Implement automated tests for POST /shorten (code gen, custom alias, conflict, SSRF)",
+      "owner": "tester",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R7",
+        "R10"
+      ],
+      "depends_on": [
+        "T8"
+      ]
+    },
+    {
+      "id": "T10",
+      "title": "Implement automated tests for GET /{code} (redirects, expiry, 404, click counts)",
+      "owner": "tester",
+      "requirement_ids": [
+        "R3",
+        "R4",
+        "R10"
+      ],
+      "depends_on": [
+        "T8"
+      ]
+    },
+    {
+      "id": "T11",
+      "title": "Implement automated tests for GET /analytics/{code} and GET /health",
+      "owner": "tester",
+      "requirement_ids": [
+        "R5",
+        "R6",
+        "R10"
+      ],
+      "depends_on": [
+        "T8"
+      ]
+    },
+    {
+      "id": "T12",
+      "title": "Implement automated tests for rate limiting and service restart data persistence",
+      "owner": "tester",
+      "requirement_ids": [
+        "R8",
+        "R9",
+        "R10"
+      ],
+      "depends_on": [
+        "T8"
+      ]
+    },
+    {
+      "id": "T13",
+      "title": "Write README.md with architecture overview, setup, execution commands, and API docs",
+      "owner": "docs",
+      "requirement_ids": [
+        "R10"
+      ],
+      "depends_on": [
+        "T7"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "DNS rebinding attack where target domain resolves to a public IP during POST /shorten validation but later resolves to a private IP.",
+      "mitigation": "Because the service redirects clients with HTTP 307 rather than fetching content itself, server-side fetch SSRF is eliminated; DNS validation at POST /shorten stops using the shortener as a proxy for malicious destinations."
+    },
+    {
+      "risk": "SQLite concurrent write lock contention when incrementing clicks under high redirect loads.",
+      "mitigation": "Enable SQLite WAL (Write-Ahead Logging) mode via connection string options ('Data Source=app.db;Cache=Shared;Mode=ReadWriteCreate') and execute click updates with atomic SQL execution."
+    },
+    {
+      "risk": "Client IP spoofing behind reverse proxies affecting rate limiting partitions.",
+      "mitigation": "Configure ASP.NET Core ForwardedHeadersOptions with known networks/proxies so client IP extraction from X-Forwarded-For is validated and not spoofable."
+    }
+  ]
+}

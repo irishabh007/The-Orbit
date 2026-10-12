@@ -1,0 +1,245 @@
+{
+  "approvals": [
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "requirements",
+      "reason": "agent asks for human input: 3 blocking clarifying question(s) Q1, Q2, Q4: answer them with 'changes', or approve to accept the proposed defaults",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "architect",
+      "reason": "node requires approval; policy: role 'architect' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.004
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "release",
+      "reason": "node requires approval; policy: role 'release' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    }
+  ],
+  "attempt_success_rate": 0.789,
+  "events": 190,
+  "failures": 4,
+  "fallbacks": 0,
+  "model_usage": {
+    "by_node": {
+      "architect": {
+        "calls": 1,
+        "cost_usd": 0.0159,
+        "input_tokens": 3841,
+        "output_tokens": 3483,
+        "thinking_tokens": 0,
+        "unpriced_calls": 0
+      },
+      "developer": {
+        "calls": 5,
+        "cost_usd": 0.5419,
+        "input_tokens": 60743,
+        "output_tokens": 37722,
+        "thinking_tokens": 94633,
+        "unpriced_calls": 0
+      },
+      "docs": {
+        "calls": 1,
+        "cost_usd": 0.0254,
+        "input_tokens": 6384,
+        "output_tokens": 5501,
+        "thinking_tokens": 0,
+        "unpriced_calls": 0
+      },
+      "release": {
+        "calls": 1,
+        "cost_usd": 0.0315,
+        "input_tokens": 26474,
+        "output_tokens": 1277,
+        "thinking_tokens": 1837,
+        "unpriced_calls": 0
+      },
+      "requirements": {
+        "calls": 1,
+        "cost_usd": 0.0135,
+        "input_tokens": 1057,
+        "output_tokens": 1981,
+        "thinking_tokens": 1400,
+        "unpriced_calls": 0
+      },
+      "tester": {
+        "calls": 5,
+        "cost_usd": 0.489,
+        "input_tokens": 63087,
+        "output_tokens": 40986,
+        "thinking_tokens": 76798,
+        "unpriced_calls": 0
+      }
+    },
+    "calls": 14,
+    "calls_without_thinking_count": 2,
+    "cost_usd": 1.1173,
+    "input_tokens": 161586,
+    "models": [
+      "gemini-3.8-flash"
+    ],
+    "output_tokens": 90950,
+    "thinking_tokens": 174668,
+    "unpriced_calls": 0
+  },
+  "mttr_s": 1040.139,
+  "node_attempts": 19,
+  "nodes": {
+    "architect": {
+      "attempts": 1,
+      "duration_ms": 15,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "developer": {
+      "attempts": 5,
+      "duration_ms": 995140,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "docs": {
+      "attempts": 1,
+      "duration_ms": 0,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "release": {
+      "attempts": 1,
+      "duration_ms": 17250,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "requirements": {
+      "attempts": 1,
+      "duration_ms": 14,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "tester": {
+      "attempts": 5,
+      "duration_ms": 0,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "verify": {
+      "attempts": 5,
+      "duration_ms": 14047,
+      "failures": 4,
+      "state": "SUCCEEDED"
+    }
+  },
+  "policy": {
+    "denied": 0,
+    "escalated": 12,
+    "rules": {
+      "autonomy": 2,
+      "protected_paths": 10
+    }
+  },
+  "recoveries": 1,
+  "repair_loops": 4,
+  "retries": 0,
+  "retry_rate": 0.0,
+  "rollback_rate": 0.0,
+  "rollbacks": 0,
+  "run_success_rate": 1.0,
+  "runs": [
+    {
+      "latency_s": 1073.963,
+      "reason": "",
+      "run_id": "greenfield-20261012T200558Z",
+      "state": "SUCCEEDED",
+      "steps": 19
+    }
+  ],
+  "unrecovered": 0
+}

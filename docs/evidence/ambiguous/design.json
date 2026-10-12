@@ -1,0 +1,412 @@
+{
+  "overview": "Secure Link Shortener & Analytics Service built on .NET 10 Minimal APIs and SQLite with EF Core. It enforces zero-trust URL ingress via strict protocol checks, recursive SSRF validation (blocking loopback, RFC 1918, RFC 4193, link-local, and cloud metadata), and configurable denylisting. Redirects use HTTP 307 temporary redirects and record privacy-preserving analytics without storing client IPs or user agents. Ephemeral in-memory sliding window rate limiting throttles abuse.",
+  "components": [
+    {
+      "name": "Program",
+      "responsibility": "Application bootstrapper, service registration, configuration loading, pipeline setup, endpoint mappings, and public partial class Program declaration.",
+      "module": "src/App/App.csproj"
+    },
+    {
+      "name": "ShortenedLink",
+      "responsibility": "Entity representing a shortened URL, token identifier, destination URL, creation timestamp, expiration timestamp, and total click count.",
+      "module": "src/App/Models/ShortenedLink.cs"
+    },
+    {
+      "name": "DailyClickMetric",
+      "responsibility": "Entity aggregating link redirection counts per UTC date string (YYYY-MM-DD) per shortened link without storing PII.",
+      "module": "src/App/Models/DailyClickMetric.cs"
+    },
+    {
+      "name": "ReferrerMetric",
+      "responsibility": "Entity aggregating link redirection counts per sanitized referrer host domain per shortened link without storing PII.",
+      "module": "src/App/Models/ReferrerMetric.cs"
+    },
+    {
+      "name": "AppDbContext",
+      "responsibility": "Entity Framework Core DbContext managing SQLite persistence, table schemas, entity configurations, and indexes.",
+      "module": "src/App/Data/AppDbContext.cs"
+    },
+    {
+      "name": "UrlSecurityValidator",
+      "responsibility": "Validates HTTP/HTTPS scheme, resolves host DNS to ensure no private/loopback/link-local/metadata IPs (SSRF), and verifies host against denylist.",
+      "module": "src/App/Services/UrlSecurityValidator.cs"
+    },
+    {
+      "name": "RateLimiterService",
+      "responsibility": "In-memory client rate limiter tracking request counts in sliding windows using ephemeral hashed client addresses without database persistence.",
+      "module": "src/App/Services/RateLimiterService.cs"
+    },
+    {
+      "name": "TelemetryCounterService",
+      "responsibility": "Tracks internal operational telemetry metrics including SSRF rejections, denylist blocks, and redirect counts.",
+      "module": "src/App/Services/TelemetryCounterService.cs"
+    },
+    {
+      "name": "LinkService",
+      "responsibility": "Orchestrates link creation, expiration calculation, token generation, 307 temporary redirection resolution, and aggregate analytics ingestion.",
+      "module": "src/App/Services/LinkService.cs"
+    },
+    {
+      "name": "TestsProject",
+      "responsibility": "xUnit integration and unit tests using WebApplicationFactory to test endpoints, validation logic, SSRF blocks, and rate limiting.",
+      "module": "tests/Tests.csproj"
+    }
+  ],
+  "api": [
+    {
+      "method": "POST",
+      "path": "/api/links",
+      "summary": "Create a shortened link with security validation, custom or default expiration, and rate limiting",
+      "status_codes": [
+        201,
+        400,
+        429
+      ],
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/links/{id}/insights",
+      "summary": "Retrieve total clicks, 30-day UTC daily trend, and top 10 referrer domains for a link",
+      "status_codes": [
+        200,
+        404
+      ],
+      "requirement_ids": [
+        "R7",
+        "R8"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/r/{id}",
+      "summary": "Resolve shortened link to destination URL with HTTP 307 and update aggregated analytics",
+      "status_codes": [
+        307,
+        404,
+        410
+      ],
+      "requirement_ids": [
+        "R4",
+        "R6",
+        "R7",
+        "R8"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "summary": "Health check endpoint verifying database connectivity and operational status",
+      "status_codes": [
+        200,
+        503
+      ],
+      "requirement_ids": [
+        "R9"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/telemetry",
+      "summary": "Operational telemetry metrics exposing rejection counts and overall system throughput",
+      "status_codes": [
+        200
+      ],
+      "requirement_ids": [
+        "R9"
+      ]
+    }
+  ],
+  "data_model": [
+    {
+      "name": "ShortenedLink",
+      "fields": [
+        "string Id (Primary Key, unique alphanumeric token)",
+        "string DestinationUrl (Original validated target URL)",
+        "long CreatedAtEpochUtc (UTC seconds)",
+        "long ExpiresAtEpochUtc (UTC seconds)",
+        "long TotalClicks (Aggregate lifetime counter)"
+      ]
+    },
+    {
+      "name": "DailyClickMetric",
+      "fields": [
+        "long Id (Primary Key, auto-increment)",
+        "string ShortenedLinkId (Foreign Key -> ShortenedLink.Id)",
+        "string DateUtc (Format: YYYY-MM-DD)",
+        "long ClickCount (Daily aggregated visit count)"
+      ]
+    },
+    {
+      "name": "ReferrerMetric",
+      "fields": [
+        "long Id (Primary Key, auto-increment)",
+        "string ShortenedLinkId (Foreign Key -> ShortenedLink.Id)",
+        "string ReferrerDomain (Sanitized domain host or direct)",
+        "long ClickCount (Referrer aggregated visit count)"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Redirection HTTP Status Code",
+      "choice": "HTTP 307 Temporary Redirect",
+      "rationale": "Ensures browsers and proxies do not cache the redirect response, guaranteeing every visit reaches the server for analytics while preserving the request method.",
+      "alternatives": [
+        "HTTP 301 Permanent Redirect",
+        "HTTP 302 Found"
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "Privacy-Preserving Analytics Storage",
+      "choice": "Pre-aggregated counter tables (DailyClickMetric and ReferrerMetric) and zero raw request log persistence",
+      "rationale": "Fully complies with R8 zero-PII requirements by never storing IP addresses, full user agents, or individual visit logs, updating pre-aggregated daily/referrer counters atomically.",
+      "alternatives": [
+        "Relational logs storing raw IP and User-Agent",
+        "Offloaded ELK log pipeline with IP masking"
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "Shortened Token Generation Strategy",
+      "choice": "Cryptographically secure random Base62 7-character token generation",
+      "rationale": "Prevents link enumeration attacks, avoids ID collisions, and conforms to out-of-scope boundaries regarding custom vanity slugs.",
+      "alternatives": [
+        "Client-provided custom vanity slugs",
+        "Sequential auto-increment IDs"
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "Rate Limiting Mechanism",
+      "choice": "Ephemeral sliding window memory cache keyed by SHA-256 hashed remote IP",
+      "rationale": "Meets rate-limiting requirement R5 with minimal infrastructure overhead while preventing long-term storage of client IP addresses.",
+      "alternatives": [
+        "External Redis rate limiter",
+        "Distributed token bucket in SQLite"
+      ]
+    },
+    {
+      "id": "D5",
+      "title": "Denylist Configuration Architecture",
+      "choice": "Appsettings configuration Denylist:BlockedDomains array loaded on startup and refreshed via Options pattern",
+      "rationale": "Allows operations to update denylisted domains via environment variables or configuration without recompilation or external network dependencies.",
+      "alternatives": [
+        "Hard-coded string array in source code",
+        "Remote DNSBL lookup per request"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Initialize .NET 10 solution, App and Tests projects, SQLite dependencies, and appsettings configuration",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T2",
+      "title": "Implement EF Core AppDbContext, entities (ShortenedLink, DailyClickMetric, ReferrerMetric), and database migrations",
+      "owner": "developer",
+      "requirement_ids": [
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Implement UrlSecurityValidator with scheme validation, recursive DNS/SSRF IP checks, and domain denylist filtering",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R9"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Implement in-memory sliding-window RateLimiterService with hashed client IP keys",
+      "owner": "developer",
+      "requirement_ids": [
+        "R5"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Implement TelemetryCounterService for operational telemetry and rejection counters",
+      "owner": "developer",
+      "requirement_ids": [
+        "R9"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Implement POST /api/links endpoint for secure link creation with default and custom expiration",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5"
+      ],
+      "depends_on": [
+        "T2",
+        "T3",
+        "T4",
+        "T5"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Implement GET /r/{id} redirect endpoint returning HTTP 307 and recording aggregated visit analytics",
+      "owner": "developer",
+      "requirement_ids": [
+        "R4",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T2",
+        "T5"
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Implement GET /api/links/{id}/insights endpoint returning 30-day UTC click trends and top 10 referrers",
+      "owner": "developer",
+      "requirement_ids": [
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T2"
+      ]
+    },
+    {
+      "id": "T9",
+      "title": "Implement GET /healthz and GET /api/telemetry monitoring endpoints",
+      "owner": "developer",
+      "requirement_ids": [
+        "R9"
+      ],
+      "depends_on": [
+        "T2",
+        "T5"
+      ]
+    },
+    {
+      "id": "T10",
+      "title": "Author WebApplicationFactory integration tests for URL scheme, SSRF blocks, denylist, and rate limiting",
+      "owner": "tester",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R5"
+      ],
+      "depends_on": [
+        "T6",
+        "T7",
+        "T8",
+        "T9"
+      ]
+    },
+    {
+      "id": "T11",
+      "title": "Author integration tests for expiration checks, HTTP 307 redirection, insights aggregations, and zero-PII assertions",
+      "owner": "tester",
+      "requirement_ids": [
+        "R4",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T6",
+        "T7",
+        "T8"
+      ]
+    },
+    {
+      "id": "T12",
+      "title": "Author tests for health checks and telemetry rejection metrics",
+      "owner": "tester",
+      "requirement_ids": [
+        "R9"
+      ],
+      "depends_on": [
+        "T9"
+      ]
+    },
+    {
+      "id": "T13",
+      "title": "Document API contract specification, error responses, configuration instructions, and security controls",
+      "owner": "docs",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "depends_on": [
+        "T6",
+        "T7",
+        "T8",
+        "T9"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "DNS rebinding attacks or multi-IP hosts allowing SSRF bypass to internal or cloud metadata endpoints.",
+      "mitigation": "Resolve DNS hostnames to IP addresses synchronously at creation time, inspect all resolved addresses against CIDR ranges (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, ::1, fc00::/7, fe80::/10), and reject immediately if any match."
+    },
+    {
+      "risk": "Database lock contention on SQLite during high concurrent click spikes on a viral shortened link.",
+      "mitigation": "Execute daily and referrer metric increments within an isolated database transaction with indexed composite keys (ShortenedLinkId, DateUtc) and (ShortenedLinkId, ReferrerDomain)."
+    },
+    {
+      "risk": "Denial of service via massive link creation requests exhausting local SQLite storage.",
+      "mitigation": "Rate limiting per hashed IP window, strict max URL length limit (2048 chars), and input payload size capping."
+    }
+  ]
+}

@@ -1,0 +1,285 @@
+{
+  "overview": "Implements the daily click analytics feature for active shortened links by introducing a GET /analytics/{code}/daily endpoint. The design utilizes a pre-aggregated daily counter entity (ShortLinkDailyClick) with a composite index on (ShortLinkId, Date) to guarantee fast lookups and atomic daily incrementation during redirects without modifying existing ShortLink counters. Daily queries generate a zero-filled contiguous UTC date sequence ending on the current UTC date, strictly validating the 'days' query parameter (1 to 90) and handling expired or missing links uniformly with existing analytics endpoints.",
+  "components": [
+    {
+      "name": "ShortLinkDailyClick",
+      "responsibility": "Represents pre-aggregated daily click metrics per link, storing ShortLinkId, UTC Date (DateOnly), and click count.",
+      "module": "src/App/Data/ShortLinkDailyClick.cs"
+    },
+    {
+      "name": "AppDbContext",
+      "responsibility": "Entity Framework Core database context configuring ShortLink and ShortLinkDailyClick entities, composite unique index on (ShortLinkId, Date), and foreign key relations.",
+      "module": "src/App/Data/AppDbContext.cs"
+    },
+    {
+      "name": "Contracts",
+      "responsibility": "Defines API data transfer records including DailyAnalyticsResponse, DailyClickRecord, and DailyAnalyticsResult service models.",
+      "module": "src/App/Models/Contracts.cs"
+    },
+    {
+      "name": "LinkService",
+      "responsibility": "Implements business logic for atomically updating daily click counts during GET /{code} redirection and querying/zero-filling daily analytics over requested UTC date windows.",
+      "module": "src/App/Services/LinkService.cs"
+    },
+    {
+      "name": "LinkEndpoints",
+      "responsibility": "Defines HTTP route mapping for GET /analytics/{code}/daily, validates the days query parameter (1 to 90), and returns appropriate HTTP responses.",
+      "module": "src/App/Endpoints/LinkEndpoints.cs"
+    },
+    {
+      "name": "AnalyticsAndHealthTests",
+      "responsibility": "Integration test suite validating GET /analytics/{code}/daily parameter validation, zero-filling, expired/not-found statuses, and safety against invalid input.",
+      "module": "tests/AnalyticsAndHealthTests.cs"
+    },
+    {
+      "name": "RedirectEndpointTests",
+      "responsibility": "Integration test suite validating that successful redirects increment both lifetime and daily click counts for the current UTC date.",
+      "module": "tests/RedirectEndpointTests.cs"
+    }
+  ],
+  "api": [
+    {
+      "method": "GET",
+      "path": "/analytics/{code}/daily",
+      "summary": "Retrieve daily click analytics for a short link over a UTC date range (up to 90 days, default 7).",
+      "status_codes": [
+        200,
+        400,
+        404,
+        500
+      ],
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R6",
+        "R7"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/{code}",
+      "summary": "Redirect to destination URL and record lifetime and daily click counts.",
+      "status_codes": [
+        307,
+        404,
+        410
+      ],
+      "requirement_ids": [
+        "R4"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/{code}",
+      "summary": "Retrieve aggregate lifetime click analytics for a short link.",
+      "status_codes": [
+        200,
+        404
+      ],
+      "requirement_ids": [
+        "R3",
+        "R5"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/shorten",
+      "summary": "Create a new short link with optional expiration and custom alias.",
+      "status_codes": [
+        201,
+        400,
+        409,
+        429
+      ],
+      "requirement_ids": [
+        "R5"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "summary": "Check service and database operational status.",
+      "status_codes": [
+        200,
+        503
+      ],
+      "requirement_ids": [
+        "R5",
+        "R6"
+      ]
+    }
+  ],
+  "data_model": [
+    {
+      "name": "ShortLink",
+      "fields": [
+        "long Id (Primary Key, Autoincrement)",
+        "string Code (Unique, Indexed, VarChar 32)",
+        "string OriginalUrl (Required, Text)",
+        "long ClickCount (Default 0, Not Null)",
+        "DateTime CreatedAtUtc (Required, DateTime)",
+        "DateTime? LastVisitedAtUtc (Nullable, DateTime)",
+        "DateTime? ExpiresAtUtc (Nullable, DateTime, Indexed)"
+      ]
+    },
+    {
+      "name": "ShortLinkDailyClick",
+      "fields": [
+        "long Id (Primary Key, Autoincrement)",
+        "long ShortLinkId (Foreign Key -> ShortLink.Id, Required)",
+        "DateOnly Date (Required, UTC calendar date)",
+        "long Clicks (Required, Default 0)",
+        "Unique Index on (ShortLinkId, Date)"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Pre-aggregated Daily Counters vs Individual Event Log Rows",
+      "choice": "Store daily clicks in a pre-aggregated ShortLinkDailyClick table keyed uniquely on (ShortLinkId, Date).",
+      "rationale": "High-traffic redirect endpoints would suffer unbounded storage growth and costly run-time GROUP BY aggregations if every click were stored as an individual row. A pre-aggregated daily counter provides O(1) upsert during redirection and O(N) bounded retrieval for up to 90 days.",
+      "alternatives": [
+        "Individual ClickEvents table recording timestamp, IP, and ShortLinkId",
+        "JSON column on ShortLink containing serialized daily counts"
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "In-Memory Date Range Zero-Filling",
+      "choice": "Query existing records for the link between (TodayUtc - days + 1) and TodayUtc, projecting into a dictionary, then generate all N consecutive dates in C# memory zero-filling dates with no clicks.",
+      "rationale": "SQLite lacks built-in calendar tables or recursive CTE convenience across all configurations. Since N is capped at 90, in-memory zero-filling is negligible in CPU and memory overhead while ensuring deterministic chronological ascending order.",
+      "alternatives": [
+        "Recursive common table expression (CTE) in SQL generating calendar dates",
+        "Pre-populating 90 days of zero rows at link creation time"
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "Strict Query Parameter Parsing and Validation",
+      "choice": "Explicitly parse the 'days' query string parameter using int.TryParse and validate (1 <= days <= 90), returning HTTP 400 Bad Request with ErrorResponse if invalid or missing format.",
+      "rationale": "Protects against unexpected inputs, injection attempts, and invalid boundary queries without bubbling unhandled exceptions.",
+      "alternatives": [
+        "Default to 7 on any parsing failure",
+        "Clamp out-of-range values silently to 1 or 90"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Define Daily Analytics contract models and results",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R7"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T2",
+      "title": "Create ShortLinkDailyClick entity and configure AppDbContext with composite index",
+      "owner": "developer",
+      "requirement_ids": [
+        "R5",
+        "R6"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T3",
+      "title": "Implement daily click incrementing during redirection in LinkService",
+      "owner": "developer",
+      "requirement_ids": [
+        "R4",
+        "R5"
+      ],
+      "depends_on": [
+        "T1",
+        "T2"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Implement daily analytics query and zero-filling logic in LinkService",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R6"
+      ],
+      "depends_on": [
+        "T1",
+        "T2"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Expose and validate GET /analytics/{code}/daily endpoint in LinkEndpoints",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1",
+        "R3",
+        "R7"
+      ],
+      "depends_on": [
+        "T4"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Write integration tests for redirect daily click counting",
+      "owner": "tester",
+      "requirement_ids": [
+        "R4",
+        "R8"
+      ],
+      "depends_on": [
+        "T3"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Write integration tests for GET /analytics/{code}/daily endpoint behavior, zero-filling, and validation",
+      "owner": "tester",
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R3",
+        "R7",
+        "R8"
+      ],
+      "depends_on": [
+        "T5"
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Update README and API documentation for GET /analytics/{code}/daily",
+      "owner": "docs",
+      "requirement_ids": [
+        "R8"
+      ],
+      "depends_on": [
+        "T5"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Concurrency conflicts or duplicate rows during simultaneous redirects on the same link on date boundaries.",
+      "mitigation": "Enforce a unique database constraint on (ShortLinkId, Date) and use EF Core execution strategy or database upsert logic to handle concurrent increments cleanly."
+    },
+    {
+      "risk": "Database migration altering ShortLink schema or causing data loss during deployment.",
+      "mitigation": "Implement ShortLinkDailyClick as an independent table with an additive foreign key relationship, leaving the existing ShortLink table untouched to guarantee backwards compatibility and zero data loss."
+    },
+    {
+      "risk": "Timezone skew or local clock drift causing inconsistent date categorization.",
+      "mitigation": "Strictly utilize UTC date calculations using DateTime.UtcNow and DateOnly.FromDateTime(DateTime.UtcNow) across all writes and queries."
+    }
+  ]
+}

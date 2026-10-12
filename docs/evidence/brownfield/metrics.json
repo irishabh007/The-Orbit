@@ -1,0 +1,226 @@
+{
+  "approvals": [
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "requirements",
+      "reason": "agent asks for human input: 2 blocking clarifying question(s) Q1, Q2: answer them with 'changes', or approve to accept the proposed defaults",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "impact",
+      "reason": "node requires approval; policy: role 'impact' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "architect",
+      "reason": "node requires approval; policy: role 'architect' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Data/ShortLink.cs, src/App/Middleware/RateLimitingConfiguration.cs, src/App/Services/CodeGeneratorService.cs, src/App/Services/UrlValidationService.cs not in the approved plan (design.json, impact.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.Development.json matches protected path '*appsettings*.json'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Data/ShortLink.cs, src/App/Middleware/RateLimitingConfiguration.cs, src/App/Services/CodeGeneratorService.cs, src/App/Services/UrlValidationService.cs not in the approved plan (design.json, impact.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "release",
+      "reason": "node requires approval; policy: role 'release' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    }
+  ],
+  "attempt_success_rate": 0.917,
+  "events": 113,
+  "failures": 1,
+  "fallbacks": 0,
+  "model_usage": {
+    "by_node": {
+      "architect": {
+        "calls": 1,
+        "cost_usd": 0.0198,
+        "input_tokens": 7611,
+        "output_tokens": 2499,
+        "thinking_tokens": 1248,
+        "unpriced_calls": 0
+      },
+      "developer": {
+        "calls": 3,
+        "cost_usd": 0.3225,
+        "input_tokens": 41954,
+        "output_tokens": 27462,
+        "thinking_tokens": 50134,
+        "unpriced_calls": 0
+      },
+      "docs": {
+        "calls": 1,
+        "cost_usd": 0.0348,
+        "input_tokens": 10003,
+        "output_tokens": 7271,
+        "thinking_tokens": 0,
+        "unpriced_calls": 0
+      },
+      "impact": {
+        "calls": 1,
+        "cost_usd": 0.0119,
+        "input_tokens": 5889,
+        "output_tokens": 887,
+        "thinking_tokens": 1117,
+        "unpriced_calls": 0
+      },
+      "release": {
+        "calls": 1,
+        "cost_usd": 0.0333,
+        "input_tokens": 33287,
+        "output_tokens": 875,
+        "thinking_tokens": 1360,
+        "unpriced_calls": 0
+      },
+      "requirements": {
+        "calls": 1,
+        "cost_usd": 0.0149,
+        "input_tokens": 4200,
+        "output_tokens": 1720,
+        "thinking_tokens": 1409,
+        "unpriced_calls": 0
+      },
+      "tester": {
+        "calls": 2,
+        "cost_usd": 0.1468,
+        "input_tokens": 32780,
+        "output_tokens": 27248,
+        "thinking_tokens": 5337,
+        "unpriced_calls": 0
+      }
+    },
+    "calls": 10,
+    "calls_without_thinking_count": 1,
+    "cost_usd": 0.5839,
+    "input_tokens": 135724,
+    "models": [
+      "gemini-3.8-flash"
+    ],
+    "output_tokens": 67962,
+    "thinking_tokens": 60605,
+    "unpriced_calls": 0
+  },
+  "mttr_s": 88.438,
+  "node_attempts": 12,
+  "nodes": {
+    "architect": {
+      "attempts": 1,
+      "duration_ms": 24672,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "developer": {
+      "attempts": 2,
+      "duration_ms": 49063,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "docs": {
+      "attempts": 1,
+      "duration_ms": 42625,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "impact": {
+      "attempts": 1,
+      "duration_ms": 13577,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "release": {
+      "attempts": 1,
+      "duration_ms": 20593,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "requirements": {
+      "attempts": 1,
+      "duration_ms": 22844,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "scan": {
+      "attempts": 1,
+      "duration_ms": 0,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "tester": {
+      "attempts": 2,
+      "duration_ms": 77531,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "verify": {
+      "attempts": 2,
+      "duration_ms": 10858,
+      "failures": 1,
+      "state": "SUCCEEDED"
+    }
+  },
+  "policy": {
+    "denied": 0,
+    "escalated": 7,
+    "rules": {
+      "autonomy": 3,
+      "protected_paths": 4,
+      "scope": 2
+    }
+  },
+  "recoveries": 1,
+  "repair_loops": 1,
+  "retries": 0,
+  "retry_rate": 0.0,
+  "rollback_rate": 0.0,
+  "rollbacks": 0,
+  "run_success_rate": 1.0,
+  "runs": [
+    {
+      "latency_s": 531.111,
+      "reason": "",
+      "run_id": "brownfield-20261012T202525Z",
+      "state": "SUCCEEDED",
+      "steps": 12
+    }
+  ],
+  "unrecovered": 0
+}

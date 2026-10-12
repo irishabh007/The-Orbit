@@ -1,0 +1,75 @@
+{
+  "summary": "Introduce a new GET /analytics/{code}/daily endpoint providing zero-filled UTC daily click trends up to 90 days, with pre-aggregated daily click persistence during redirects and data store indexing.",
+  "change_type": "feature",
+  "affected": [
+    {
+      "target": "GET /analytics/{code}/daily",
+      "kind": "endpoint",
+      "change": "add",
+      "reason": "Expose daily click analytics for active links with an optional days query parameter (default 7, max 90) as required by R1."
+    },
+    {
+      "target": "GET /{code}",
+      "kind": "endpoint",
+      "change": "modify",
+      "reason": "Update redirection logic to record daily click counts for the current UTC date alongside lifetime counters per R4."
+    },
+    {
+      "target": "src/App/Models/Contracts.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Define response and item contract models for daily analytics breakdown (e.g., DailyAnalyticsResponse, DailyClickRecord)."
+    },
+    {
+      "target": "src/App/Data/AppDbContext.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Add DbSet for daily click tracking, configure relationships/keys, and add composite indexes on short link ID and date for R6."
+    },
+    {
+      "target": "src/App/Services/LinkService.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Implement daily click incrementing within redirection handling and implement retrieval logic with zero-filling over the UTC window."
+    },
+    {
+      "target": "src/App/Endpoints/LinkEndpoints.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Map the new GET /analytics/{code}/daily route, validate the days query parameter, and map service results to HTTP responses."
+    },
+    {
+      "target": "tests/AnalyticsAndHealthTests.cs",
+      "kind": "test",
+      "change": "modify",
+      "reason": "Add integration test coverage for daily analytics scenarios (default window, custom days, 400 validation, 404 handling, and zero-filling)."
+    },
+    {
+      "target": "tests/RedirectEndpointTests.cs",
+      "kind": "test",
+      "change": "modify",
+      "reason": "Add assertions ensuring GET /{code} increments daily click counts for the current UTC date without breaking redirection behavior."
+    }
+  ],
+  "risk": "medium",
+  "risks": [
+    {
+      "risk": "Increased database write contention or latency during high-throughput link redirection when updating daily click records.",
+      "mitigation": "Use an indexed pre-aggregated daily counter row per link and date with an atomic upsert or EF Core transaction to avoid contention and unbounded table growth."
+    },
+    {
+      "risk": "Database migration introducing schema changes could disrupt existing ShortLink rows and lifetime counters.",
+      "mitigation": "Design migration to add a separate daily tracking table with foreign key reference, preserving existing ShortLink schema and lifetime counters per R5."
+    },
+    {
+      "risk": "Query parameter validation bypass or unexpected format in 'days' causing 500 internal server errors.",
+      "mitigation": "Enforce strict parameter parsing and boundary checks (1 <= days <= 90) returning HTTP 400 with standard ErrorResponse before querying the database."
+    }
+  ],
+  "regression_tests": [
+    "tests/AnalyticsAndHealthTests.cs",
+    "tests/RedirectEndpointTests.cs",
+    "tests/ShortenEndpointTests.cs",
+    "tests/RateLimitingAndPersistenceTests.cs"
+  ]
+}

@@ -1,0 +1,264 @@
+{
+  "approvals": [
+    {
+      "by": "human:product-owner (scripted)",
+      "comment": "Answers from the product owner (scripted for reproducible demos; in interactive mode you type your own):\n- \"Safer\" means: only http/https targets; block localhost, private and cloud-metadata addresses (SSRF);\n  reject targets on a configurable domain denylist (malware/phishing); links expire after 90 days by\n  default, configurable per link; rate-limit link creation per client.\n- \"Better insights\" means: per-link total clicks, clicks per UTC day for the last 30 days, and the top\n  referrer domains. No personal data: do not store IP addresses or full user agents.\n- This is a new service; no existing system to integrate with.\n- Out of scope for now: user accounts, QR codes, geo-location.",
+      "node": "requirements",
+      "reason": "node requires approval; agent asks for human input: 2 blocking clarifying question(s) Q1, Q2: answer them with 'changes', or approve to accept the proposed defaults",
+      "verdict": "changes",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "requirements",
+      "reason": "node requires approval",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "architect",
+      "reason": "node requires approval; policy: role 'architect' has autonomy 'supervised'",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.003
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.001
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "tester",
+      "reason": "policy: tests.bundle:tests/Tests.csproj matches protected path '*.csproj'",
+      "verdict": "approve",
+      "wait_s": 0.002
+    },
+    {
+      "by": "human:auto-approve",
+      "comment": "--auto-approve",
+      "node": "developer",
+      "reason": "policy: code.bundle:src/App/App.csproj matches protected path '*.csproj'; code.bundle:src/App/appsettings.json matches protected path '*appsettings*.json'; out of scope: src/App/Services/TestingCompatibility.cs not in the approved plan (design.json)",
+      "verdict": "approve",
+      "wait_s": 0.002
+    }
+  ],
+  "attempt_success_rate": 0.654,
+  "events": 257,
+  "failures": 9,
+  "fallbacks": 0,
+  "model_usage": {
+    "by_node": {
+      "architect": {
+        "calls": 2,
+        "cost_usd": 0.0247,
+        "input_tokens": 8288,
+        "output_tokens": 4447,
+        "thinking_tokens": 475,
+        "unpriced_calls": 0
+      },
+      "developer": {
+        "calls": 10,
+        "cost_usd": 1.1273,
+        "input_tokens": 168915,
+        "output_tokens": 121081,
+        "thinking_tokens": 145740,
+        "unpriced_calls": 0
+      },
+      "docs": {
+        "calls": 1,
+        "cost_usd": 0.0264,
+        "input_tokens": 6136,
+        "output_tokens": 5802,
+        "thinking_tokens": 0,
+        "unpriced_calls": 0
+      },
+      "requirements": {
+        "calls": 2,
+        "cost_usd": 0.0236,
+        "input_tokens": 1878,
+        "output_tokens": 3582,
+        "thinking_tokens": 2333,
+        "unpriced_calls": 0
+      },
+      "tester": {
+        "calls": 8,
+        "cost_usd": 0.5811,
+        "input_tokens": 108964,
+        "output_tokens": 72634,
+        "thinking_tokens": 60525,
+        "unpriced_calls": 0
+      }
+    },
+    "calls": 23,
+    "calls_without_thinking_count": 2,
+    "cost_usd": 1.783,
+    "input_tokens": 294181,
+    "models": [
+      "gemini-3.8-flash"
+    ],
+    "output_tokens": 207546,
+    "thinking_tokens": 209073,
+    "unpriced_calls": 0
+  },
+  "mttr_s": 92.417,
+  "node_attempts": 26,
+  "nodes": {
+    "architect": {
+      "attempts": 1,
+      "duration_ms": 31,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "developer": {
+      "attempts": 8,
+      "duration_ms": 184796,
+      "failures": 1,
+      "state": "SUCCEEDED"
+    },
+    "docs": {
+      "attempts": 1,
+      "duration_ms": 15,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "requirements": {
+      "attempts": 2,
+      "duration_ms": 0,
+      "failures": 1,
+      "state": "SUCCEEDED"
+    },
+    "tester": {
+      "attempts": 7,
+      "duration_ms": 0,
+      "failures": 0,
+      "state": "SUCCEEDED"
+    },
+    "verify": {
+      "attempts": 7,
+      "duration_ms": null,
+      "failures": 7,
+      "state": "ROLLED_BACK"
+    }
+  },
+  "policy": {
+    "denied": 0,
+    "escalated": 15,
+    "rules": {
+      "autonomy": 1,
+      "protected_paths": 14,
+      "scope": 6
+    }
+  },
+  "recoveries": 2,
+  "repair_loops": 6,
+  "retries": 2,
+  "retry_rate": 0.077,
+  "rollback_rate": 1.0,
+  "rollbacks": 1,
+  "run_success_rate": 0.0,
+  "runs": [
+    {
+      "latency_s": 232.808,
+      "reason": "verify: exit gate: tests failed (exit 1):\nTests: 26 total, 0 passed, 26 failed.\nFailures grouped by error (most frequent first):\n- 26 test(s): System.ArgumentException : An item with the same key has already been added. Key: ConnectionStrings:SQLiteConnection\n    first: Tests.R1_ProtocolSchemeTests.R1_Shorten_UnsupportedSchemes_ReturnsBadRequest(invalidUrl: \"data:text/plain;base64,SGVsbG8=\")\n    at Tests.CustomWebApplicationFactory.<>c__DisplayClass4_0.<ConfigureWebHost>b__0(WebHostBuilderContext context, IConfigurationBuilder config) in ./tests/CustomWebApplicationFactory.cs:line 75",
+      "run_id": "ambiguous-20261012T221026Z",
+      "state": "FAILED",
+      "steps": 26
+    }
+  ],
+  "unrecovered": 1
+}

@@ -1,0 +1,119 @@
+{
+  "title": "Requirements Specification: Daily Click Analytics Endpoint",
+  "problem_statement": "Marketing requires visibility into link click trends over time. The existing system tracks only aggregate click counts and the last visited timestamp. A new endpoint GET /analytics/{code}/daily must be added to provide daily click volume over a specified UTC window (up to 90 days, zero-filled for inactive days) while preserving existing endpoint contracts, total click counts, and data integrity.",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "The service shall expose a GET /analytics/{code}/daily endpoint accepting an optional 'days' query parameter (default 7, max 90).",
+      "category": "functional",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active link code 'xyz' and no query parameter, when GET /analytics/xyz/daily is called, then return HTTP 200 with 7 consecutive UTC daily records ending on the current UTC day.",
+        "Given an active link code 'xyz' and query parameter '?days=14', when GET /analytics/xyz/daily is called, then return HTTP 200 with 14 consecutive UTC daily records.",
+        "Given an active link code 'xyz' and query parameter '?days=91' or '?days=0' or '?days=invalid', when GET /analytics/xyz/daily is called, then return HTTP 400 Bad Request with an ErrorResponse."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "The daily analytics endpoint shall return click totals for each UTC date in the requested range, reporting zero for dates with no recorded clicks.",
+      "category": "functional",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active link with 3 clicks on 2026-03-29 UTC and 0 clicks on 2026-03-30 UTC, when querying daily analytics covering both days, then the entry for '2026-03-29' has clicks = 3 and '2026-03-30' has clicks = 0.",
+        "Given an active link with no visits in the last 7 days, when GET /analytics/{code}/daily is called, then return HTTP 200 containing 7 daily entries, each having clicks = 0."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "The daily analytics endpoint shall handle unknown and expired codes identically to the existing GET /analytics/{code} endpoint.",
+      "category": "functional",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given a non-existent short code 'unknown', when GET /analytics/unknown/daily is called, then return HTTP 404 Not Found with ErrorResponse matching GET /analytics/unknown.",
+        "Given a code that has reached its expiration timestamp, when GET /analytics/{code}/daily is called, then return HTTP 404 Not Found with ErrorResponse matching GET /analytics/{code}."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "Redirect requests via GET /{code} shall record daily click counts without degrading existing redirection behavior or losing aggregate counters.",
+      "category": "functional",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active link with total clicks = 10, when a redirection GET /{code} succeeds, then HTTP 307 Temporary Redirect is returned, the ShortLink total clicks becomes 11, and the current UTC date's click count is incremented by 1.",
+        "Given an expired or non-existent link, when GET /{code} is called, then no daily click record is created or incremented."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "The data store migration shall preserve all existing link records, codes, and lifetime click counts.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given a datastore with existing ShortLink rows populated prior to this feature, when the database is migrated and restarted, then all prior links retain their original code, target URL, and total click counter."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "Daily analytics retrieval shall execute within acceptable latency limits and not degrade redirect throughput.",
+      "category": "performance",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given a link with high daily traffic over 90 days, when GET /analytics/{code}/daily?days=90 is queried, then the database query completes in under 50ms using indexed lookups on link identifier and date."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "The daily analytics endpoint shall not leak internal error details or allow injection through code or query parameters.",
+      "category": "security",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given malformed query strings or SQL injection payloads in the 'code' or 'days' parameters, when GET /analytics/{code}/daily is requested, then the application rejects the request with HTTP 400 or HTTP 404 without exposing database stack traces or internal exception details."
+      ]
+    },
+    {
+      "id": "R8",
+      "text": "API documentation and the automated test suite shall be updated to include coverage for daily analytics scenarios.",
+      "category": "observability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given the automated test suite, when 'dotnet test' is executed, then all existing tests pass and new tests covering R1 through R4 pass with 100% success.",
+        "Given the project README/API documentation, the new GET /analytics/{code}/daily endpoint, query parameters, and example response are documented."
+      ]
+    }
+  ],
+  "assumptions": [
+    "The 'last N days' window includes the current UTC day (partial day) as the most recent day, covering N consecutive calendar days: [Today UTC - (N - 1) days] through [Today UTC].",
+    "Daily click tracking begins upon deployment; historical clicks prior to this feature will not be backfilled into daily distributions and will appear as 0 in daily breakdown, but lifetime total clicks remain accurate.",
+    "Dates in the response payload are represented in ISO-8601 UTC date format ('YYYY-MM-DD').",
+    "The existing rate limiting policies and error handling conventions configured in RateLimitingConfiguration.cs and Contracts.cs apply to the new endpoint."
+  ],
+  "open_questions": [
+    {
+      "id": "Q1",
+      "question": "What is the exact JSON contract expected for the GET /analytics/{code}/daily response payload?",
+      "why_it_matters": "Determines the serialization model in Contracts.cs and impacts client integrations consuming the new endpoint.",
+      "blocking": true,
+      "proposed_default": "A response model: { \"code\": string, \"totalClicks\": long, \"days\": int, \"daily\": [ { \"date\": \"YYYY-MM-DD\", \"clicks\": long } ] } ordered chronologically ascending."
+    },
+    {
+      "id": "Q2",
+      "question": "What HTTP status code and body should be returned if 'days' is non-numeric, <= 0, or > 90?",
+      "why_it_matters": "Affects API contract validation behavior and consistency with existing ErrorResponse minimal API standards.",
+      "blocking": true,
+      "proposed_default": "HTTP 400 Bad Request with standard ErrorResponse payload ('The days parameter must be an integer between 1 and 90.')."
+    },
+    {
+      "id": "Q3",
+      "question": "Should daily click counts be stored as discrete visit log entries or pre-aggregated daily counters (e.g. DailyClick table keyed by ShortLinkId and Date)?",
+      "why_it_matters": "Affects schema design, storage growth rate, and write throughput during redirects.",
+      "blocking": false,
+      "proposed_default": "Pre-aggregated daily counter table (LinkDailyClicks: LinkId, Date, Clicks) updated atomically on redirect to minimize storage footprint and avoid expensive aggregations."
+    }
+  ],
+  "out_of_scope": [
+    "Hourly, real-time streaming, or sub-daily granularity analytics.",
+    "Filtering by client IP, geographic location, referer, or user-agent.",
+    "Timezone conversions outside of UTC.",
+    "Retroactive estimation or synthetic backfilling of daily clicks prior to feature release."
+  ]
+}

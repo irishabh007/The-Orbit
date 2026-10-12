@@ -1,0 +1,22 @@
+{
+  "checks": [
+    {
+      "command": "build tests --nologo -v q -clp:ErrorsOnly",
+      "name": "build",
+      "output_tail": "\nBuild succeeded.\n    4 Warning(s)\n    0 Error(s)\n\nTime Elapsed <t>\n",
+      "passed": true,
+      "returncode": 0,
+      "timed_out": false
+    },
+    {
+      "command": "test tests --no-build --nologo -v q --logger trx;LogFileName=results.trx",
+      "name": "tests",
+      "output_tail": "Tests: 50 total, 50 passed, 0 failed.",
+      "passed": true,
+      "returncode": 0,
+      "timed_out": false
+    }
+  ],
+  "files": 21,
+  "passed": true
+}
