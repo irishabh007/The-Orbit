@@ -1,1 +1,2 @@
-# Core has no runtime dependencies yet (standard library only).
+# Core is standard library only, except PyYAML for loading policy files (CLAUDE.md rule 7).
+PyYAML>=6.0

@@ -1,0 +1,68 @@
+# Warden default policy. Loaded by warden.policy.YamlPolicy.from_file().
+#
+# Changing this file is itself a governed change: agents writing under policies/
+# need human approval (see protected_paths). Unknown keys are rejected at load time.
+version: 1
+
+# Security: deny any output (or approval summary) matching these. Reasons in the
+# audit log name the pattern and line only, never the matched text.
+secrets:
+  patterns:
+    - name: aws-access-key-id
+      regex: '\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'
+    - name: private-key
+      regex: '-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----'
+    - name: github-token
+      regex: '\bgh[pousr]_[A-Za-z0-9]{36,}\b'
+    - name: google-api-key
+      regex: '\bAIza[0-9A-Za-z_-]{35}\b'
+    - name: slack-token
+      regex: '\bxox[abprs]-[A-Za-z0-9-]{10,}'
+    - name: llm-api-key
+      regex: '\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}'
+    - name: hardcoded-credential
+      # password = "literal" style assignments; env lookups (os.environ[...]) do not match
+      regex: '(?i)\b[\w-]*(?:password|passwd|secret|api[_-]?key|token)\b["'']?\s*[:=]\s*["''][^"''\s]{8,}["'']'
+
+# Security / supply chain: manifests (matched on file name, any directory) may only
+# list these packages. pip options (-e, --index-url) and direct URLs are denied.
+# Extend the allowlist through a reviewed change to this file.
+dependencies:
+  manifests: ['requirements*.txt', 'pyproject.toml']
+  allowed:
+    - fastapi
+    - uvicorn
+    - pydantic
+    - pydantic-settings
+    - httpx
+    - pyyaml
+    - pytest
+    - pytest-cov
+    - pytest-asyncio
+    - ruff
+    - mypy
+
+# Change control: outputs at these paths need human approval before commit.
+# fnmatch semantics: '*' also matches '/', so 'migrations/*' covers subfolders.
+protected_paths:
+  - '.github/*'
+  - 'policies/*'
+  - 'migrations/*'
+  - 'Dockerfile'
+  - 'docker-compose*.yml'
+  - '.env*'
+  - 'requirements*.txt'
+  - 'pyproject.toml'
+
+# Controlled autonomy per agent role (NodeSpec.agent): full | supervised | none.
+# A fallback agent runs under its node's role. Unknown roles get the default.
+autonomy:
+  default: supervised
+  roles:
+    requirements: full
+    architect: supervised   # design decisions need sign-off
+    planner: full
+    developer: full
+    tester: full
+    docs: full
+    release: supervised     # a human makes the final release call

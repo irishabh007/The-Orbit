@@ -31,7 +31,7 @@ orchestrator can start from any point (brownfield).
 | Topic | Decision |
 |---|---|
 | Name | **Warden**; package `warden`; repo `warden-sdlc-orchestrator` |
-| Language | Python 3.11+; **standard library only in `warden/` core** |
+| Language | Python 3.11+; **standard library only in `warden/` core** (exception: PyYAML for policy files) |
 | Machine | Windows, Intel i5, 8 GB RAM: no Docker, no local models |
 | LLM | One `LLMClient` interface: Gemini free tier adapter (httpx), **record/replay** backend so reviewers run offline with no key, scripted fallback for failure demos |
 | Validation of LLM output | Pydantic schemas, retry on malformed output |
@@ -42,22 +42,25 @@ orchestrator can start from any point (brownfield).
 
 ## 3. Status
 
-**Done and tested (68 tests):**
+**Done and tested (100 tests):**
 - `models.py` states and transition table; `eventlog.py` hash chain + lineage; `artifacts.py` versioning, staleness, restore, drop
-- `dag.py`, `agent.py`, `policy.py` (interface + allow-all), `approval.py` (interface + scripted + reject-all)
+- `dag.py`, `agent.py`, `approval.py` (interface + scripted + reject-all)
+- `policy.py` + `policies/default.yaml`: YAML engine with secrets (deny, never echoed to the log),
+  dependency allowlist (deny), protected paths (escalate to approval), autonomy per agent role
+  (`full` / `supervised` / `none`); fails closed on invalid policy files
 - `orchestrator.py`: parallel scheduling with joins, retry -> fallback -> rollback, approvals,
   safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
   brownfield entry, persistence/resume
 
-**Known gaps:** ruff/mypy have never been run (fix any findings first); no real policy rules; no
+**Known gaps:** no
 LLM layer; no real agents; no CLI; no report/metrics; no docs beyond this.
 
 ## 4. Remaining work, in priority order
 
 Each item is done only when a test demonstrates it.
 
-1. **Housekeeping.** Run `pytest -q`, `ruff check .`, `mypy warden`; fix findings. Commit.
-2. **YAML policy engine** (`warden/policy.py`, `policies/default.yaml`): rules for secrets in
+1. ~~**Housekeeping.**~~ Done. Run `pytest -q`, `ruff check .`, `mypy warden`; fix findings. Commit.
+2. ~~**YAML policy engine**~~ Done. (`warden/policy.py`, `policies/default.yaml`): rules for secrets in
    output, dependency allowlist, protected paths requiring approval, and max autonomy per node kind.
    Pre and post checks; denials are never retried.
 3. **LLM layer** (`warden/llm/`): `LLMClient` protocol; Gemini adapter via httpx (key from `.env`);
@@ -92,3 +95,7 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - In-process scheduler, one machine; no distributed workers
 - LLM output is nondeterministic; replay makes demos reproducible, not the model
 - Re-planning invalidates direct consumers lazily; in-flight results are discarded if inputs change
+- Policy secret scanning is regex-based: it catches common key formats and literal credential
+  assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
+  `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
+- Test suite runs at about 2s, right at the CLAUDE.md budget; the orchestrator tests dominate

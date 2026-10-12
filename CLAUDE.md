@@ -14,7 +14,7 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 - `warden/artifacts.py`   versioned, content-hashed store; `stale()` powers re-planning
 - `warden/dag.py`         Graph + NodeSpec (gates, consumes/produces); validates at construction
 - `warden/agent.py`       Agent contract; agents RETURN staged outputs, never write the store
-- `warden/policy.py`      pre/post guardrail interface (YAML rules plug in here)
+- `warden/policy.py`      pre/post guardrail interface + YAML rule engine (`policies/default.yaml`)
 - `warden/approval.py`    human approval interface; default approver REJECTS (fail closed)
 - `warden/orchestrator.py` scheduler: parallel branches + joins, retries -> fallback -> rollback,
                            approvals, safe-stop, replan, rollback, adopt (brownfield entry), resume
@@ -26,7 +26,8 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 4. Retries are bounded; policy denials and human rejections are NEVER retried.
 5. Generated projects must be normal repos with no runtime dependency on Warden.
 6. No secrets in code or logs. Keys live in `.env` (git-ignored).
-7. Standard library only in `warden/` core; third-party deps go in agents/adapters.
+7. Standard library only in `warden/` core, except PyYAML for loading policy files;
+   other third-party deps go in agents/adapters.
 
 ## Working style
 - Small, reviewable changes: one concern per commit, tests first or alongside.
