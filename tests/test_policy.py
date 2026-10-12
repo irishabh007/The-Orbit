@@ -6,6 +6,7 @@ from typing import Any
 from warden.agent import AgentContext, AgentResult, FunctionAgent
 from warden.approval import ScriptedApprover
 from warden.artifacts import ArtifactStore
+from warden.bundle import pack
 from warden.dag import Graph, NodeSpec
 from warden.eventlog import EventLog
 from warden.models import EventType, RunState
@@ -162,6 +163,39 @@ class ProtectedPathTests(unittest.TestCase):
         decision = policy.check_post(node(produces=("Dockerfile",)), AgentResult({"Dockerfile": FAKE_AWS_KEY}))
         self.assertFalse(decision.allow)
         self.assertIn("secrets", decision.rule)
+
+
+class BundleExpansionTests(unittest.TestCase):
+    """Bundles (many files in one artifact) are checked file by file."""
+
+    def setUp(self) -> None:
+        self.policy = YamlPolicy.from_dict(rules(
+            secrets={"patterns": [{"name": "aws-access-key-id", "regex": "AKIA[0-9A-Z]{16}"}]},
+            dependencies={"manifests": ["requirements*.txt"], "allowed": ["fastapi"]},
+            protected_paths=["migrations/*"]))
+
+    def post(self, files: dict[str, str]) -> Any:
+        return self.policy.check_post(node(produces=("code.bundle",)), AgentResult({"code.bundle": pack(files)}))
+
+    def test_secret_inside_bundle_names_the_inner_file(self) -> None:
+        decision = self.post({"app/a.py": "ok\n", "app/cfg.py": f"x = 1\nKEY = '{FAKE_AWS_KEY}'\n"})
+        self.assertFalse(decision.allow)
+        self.assertIn("code.bundle:app/cfg.py line 2", decision.reason)
+        self.assertNotIn(FAKE_AWS_KEY, decision.reason)
+
+    def test_manifest_inside_bundle_is_checked(self) -> None:
+        self.assertFalse(self.post({"requirements.txt": "fastapi\nleftpad\n"}).allow)
+        self.assertTrue(self.post({"requirements.txt": "fastapi\n"}).allow)
+
+    def test_protected_path_inside_bundle_escalates(self) -> None:
+        decision = self.post({"migrations/001.sql": "create table x();"})
+        self.assertTrue(decision.requires_approval)
+        self.assertIn("migrations/001.sql", decision.reason)
+
+    def test_malformed_bundle_is_denied(self) -> None:
+        decision = self.policy.check_post(node(produces=("code.bundle",)), AgentResult({"code.bundle": "{oops"}))
+        self.assertFalse(decision.allow)
+        self.assertIn("bundle", decision.rule)
 
 
 class AutonomyRuleTests(unittest.TestCase):

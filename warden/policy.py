@@ -13,6 +13,9 @@ retrying a policy violation just burns budget.
 * ``autonomy``         per agent role: ``full`` (auto-commit), ``supervised`` (commit needs
                        human approval) or ``none`` (denied before running).
 
+Outputs named ``*.bundle`` (see ``warden.bundle``) are expanded and every rule sees
+each inner file (reported as ``code.bundle:app/x.py``); a malformed bundle is denied.
+
 Loading fails closed: an unknown key, bad regex or unknown level raises ``PolicyError``
 so a typo can never silently switch a rule off. Denials beat escalations, and all
 findings are reported together.
@@ -31,6 +34,7 @@ from typing import Any, Protocol
 import yaml  # the one third-party dependency allowed in core (see CLAUDE.md rule 7)
 
 from warden.agent import AgentContext, AgentResult
+from warden.bundle import BundleError, is_bundle, unpack
 from warden.dag import NodeSpec
 
 
@@ -65,6 +69,13 @@ AUTONOMY_LEVELS = ("full", "supervised", "none")
 _TOP_KEYS = {"version", "secrets", "dependencies", "protected_paths", "autonomy"}
 _REQ_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _COMMENT = re.compile(r"(^|\s)#.*")
+
+
+@dataclass(frozen=True)
+class _File:
+    label: str  # shown in reasons: "spec.json" or "code.bundle:app/main.py"
+    path: str  # normalized path used for glob matching
+    text: str
 
 
 @dataclass(frozen=True)
@@ -179,10 +190,11 @@ class YamlPolicy:
         return PolicyDecision()
 
     def check_post(self, node: NodeSpec, result: AgentResult) -> PolicyDecision:
-        findings = [
-            *self._secrets(result),
-            *self._dependencies(result),
-            *self._protected(result),
+        files, findings = self._expand(result)
+        findings += [
+            *self._secrets(files, result.summary),
+            *self._dependencies(files),
+            *self._protected(files),
         ]
         level = self.autonomy(node.agent)
         if level != "full":
@@ -201,9 +213,25 @@ class YamlPolicy:
             return PolicyDecision(False, rule=rules, reason=reason)
         return PolicyDecision(True, requires_approval=True, rule=rules, reason=reason)
 
-    def _secrets(self, result: AgentResult) -> Iterable[_Finding]:
-        sources = [(name, _as_text(content)) for name, content in result.outputs.items()]
-        sources.append(("summary", result.summary))
+    @staticmethod
+    def _expand(result: AgentResult) -> tuple[list[_File], list[_Finding]]:
+        files: list[_File] = []
+        findings: list[_Finding] = []
+        for name, content in result.outputs.items():
+            if not is_bundle(name):
+                files.append(_File(name, _normalize_path(name), _as_text(content)))
+                continue
+            try:
+                inner = unpack(content)
+            except BundleError as exc:
+                findings.append(_Finding("bundle", f"{name}: malformed bundle ({exc})", deny=True))
+                continue
+            files.extend(_File(f"{name}:{path}", path, text) for path, text in inner.items())
+        return files, findings
+
+    def _secrets(self, files: list[_File], summary: str) -> Iterable[_Finding]:
+        sources = [(f.label, f.text) for f in files]
+        sources.append(("summary", summary))
         for source, text in sources:
             for pname, pattern in self.secret_patterns.items():
                 match = pattern.search(text)
@@ -211,19 +239,18 @@ class YamlPolicy:
                     line = text.count("\n", 0, match.start()) + 1
                     yield _Finding("secrets", f"possible secret ({pname}) in {source} line {line}", deny=True)
 
-    def _dependencies(self, result: AgentResult) -> Iterable[_Finding]:
-        for name, content in result.outputs.items():
-            base = _normalize_path(name).rsplit("/", 1)[-1]
+    def _dependencies(self, files: list[_File]) -> Iterable[_Finding]:
+        for f in files:
+            base = f.path.rsplit("/", 1)[-1]
             if not any(fnmatch.fnmatchcase(base, m) for m in self.manifests):
                 continue
-            text = _as_text(content)
             if base == "pyproject.toml":
-                problems = self._pyproject_problems(text)
+                problems = self._pyproject_problems(f.text)
             else:
-                lines = (_COMMENT.sub("", raw).strip() for raw in text.splitlines())
+                lines = (_COMMENT.sub("", raw).strip() for raw in f.text.splitlines())
                 problems = [p for line in lines if line and (p := self._requirement_problem(line))]
             for problem in problems:
-                yield _Finding("dependencies", f"{name}: {problem}", deny=True)
+                yield _Finding("dependencies", f"{f.label}: {problem}", deny=True)
 
     def _pyproject_problems(self, text: str) -> list[str]:
         try:
@@ -248,9 +275,8 @@ class YamlPolicy:
             return f"package not in allowlist: {match.group()}"
         return None
 
-    def _protected(self, result: AgentResult) -> Iterable[_Finding]:
-        for name in result.outputs:
-            path = _normalize_path(name)
-            hit = next((p for p in self.protected_paths if fnmatch.fnmatchcase(path, p)), None)
+    def _protected(self, files: list[_File]) -> Iterable[_Finding]:
+        for f in files:
+            hit = next((p for p in self.protected_paths if fnmatch.fnmatchcase(f.path, p)), None)
             if hit is not None:
-                yield _Finding("protected_paths", f"{path} matches protected path {hit!r}", deny=False)
+                yield _Finding("protected_paths", f"{f.label} matches protected path {hit!r}", deny=False)
