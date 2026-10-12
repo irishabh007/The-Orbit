@@ -14,10 +14,17 @@ from pathlib import Path
 from typing import TextIO
 
 from demo.console import ConsoleEventLog, roles_for, wrap_roles
-from warden.agents import ROLE_CLASSES, build_agents, sdlc_graph
+from warden.agents import (
+    BASELINE,
+    ROLE_CLASSES,
+    brownfield_graph,
+    build_agents,
+    sdlc_graph,
+)
 from warden.approval import Approver
 from warden.artifacts import ArtifactStore
-from warden.bundle import is_bundle
+from warden.bundle import is_bundle, pack, unpack
+from warden.dag import Graph
 from warden.eventlog import EventLog
 from warden.llm import LLMClient
 from warden.models import EventType, RunState
@@ -27,16 +34,25 @@ from warden.tools import GitRepo, VerifyAgent, publish
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUESTS = Path(__file__).resolve().parent / "requests"
+BASELINES = Path(__file__).resolve().parent / "baselines"
 DEFAULT_POLICY = ROOT / "policies" / "default.yaml"
 RUN_MARKER = ".warden-run"
 ROLES = tuple(cls.name for cls in ROLE_CLASSES)
+
+
+PUBLISHED = ("code.bundle", "tests.bundle", "docs.bundle")
 
 
 @dataclass(frozen=True)
 class Scenario:
     name: str
     request: str
-    publish_bundles: tuple[str, ...] = ("code.bundle", "tests.bundle", "docs.bundle")
+    graph: Callable[[], Graph] = sdlc_graph
+    baseline: dict[str, str] | None = None  # existing repo files (brownfield), path -> text
+
+
+# scenario -> (baseline snapshot under demo/baselines, graph); others are greenfield-shaped
+_BROWNFIELD = {"brownfield": ("url-shortener", brownfield_graph)}
 
 
 @dataclass(frozen=True)
@@ -53,7 +69,31 @@ def load_scenario(name: str) -> Scenario:
     if not path.is_file():
         available = sorted(p.stem for p in REQUESTS.glob("*.md"))
         raise ValueError(f"unknown scenario {name!r}; available: {', '.join(available)}")
-    return Scenario(name, path.read_text(encoding="utf-8"))
+    request = path.read_text(encoding="utf-8")
+    if name in _BROWNFIELD:
+        snapshot, graph = _BROWNFIELD[name]
+        baseline = unpack((BASELINES / f"{snapshot}.json").read_text(encoding="utf-8"))
+        return Scenario(name, request, graph, baseline)
+    return Scenario(name, request)
+
+
+def _split(files: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Existing repo files -> the bundle each agent owns (tests, docs, everything else is code)."""
+    out: dict[str, dict[str, str]] = {"code.bundle": {}, "tests.bundle": {}, "docs.bundle": {}}
+    for path, text in files.items():
+        owner = ("tests.bundle" if path.startswith("tests/")
+                 else "docs.bundle" if path == "README.md" or path.startswith("docs/") else "code.bundle")
+        out[owner][path] = text
+    return out
+
+
+def _seed_baseline(store: ArtifactStore, files: dict[str, str]) -> None:
+    """The existing repo enters twice: an immutable snapshot to scan, and bundles to revise."""
+    split = _split(files)
+    for name, content in split.items():
+        store.put(name, pack(content), kind="baseline", produced_by="human:existing-repo")
+    store.put(BASELINE[0], pack(split["code.bundle"]), kind="baseline", produced_by="human:existing-repo")
+    store.put(BASELINE[1], pack(split["tests.bundle"]), kind="baseline", produced_by="human:existing-repo")
 
 
 def prepare_run_dir(path: str | Path) -> Path:
@@ -97,20 +137,24 @@ def run_scenario(
     run_id = f"{scenario.name}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
     store = ArtifactStore(run_dir / "artifacts")
     store.put("request", scenario.request, kind="request", produced_by="human:requester")
+    if scenario.baseline is not None:
+        _seed_baseline(store, scenario.baseline)
     clients = dict(llm) if isinstance(llm, Mapping) else roles_for(llm, ROLES)
     log_path = run_dir / "events.jsonl"
     commit: str | None = None
     repo: Path | None = None
     print(f"Warden run {run_id}  (scenario: {scenario.name}, output: {run_dir})", file=out, flush=True)
+    git = GitRepo(run_dir / "repo")
+    if scenario.baseline is not None and publish_repo:  # history: existing code first, then the change
+        publish(store, PUBLISHED, git, "chore: import existing codebase (brownfield baseline)\n")
     with ConsoleEventLog(log_path, out=out) as log:
-        orch = Orchestrator(sdlc_graph(), build_agents(wrap_roles(clients, out), verifier=verifier), store, log,
+        orch = Orchestrator(scenario.graph(), build_agents(wrap_roles(clients, out), verifier=verifier), store, log,
                             run_id, policy=YamlPolicy.from_file(policy_path), approver=approver,
                             state_path=run_dir / "state.json")
         summary = orch.run()
         _export(store, run_dir)
         if summary.state == RunState.SUCCEEDED and publish_repo:
-            git = GitRepo(run_dir / "repo")
-            published = publish(store, scenario.publish_bundles, git, _commit_message(store, log, run_id))
+            published = publish(store, PUBLISHED, git, _commit_message(store, log, run_id))
             commit, repo = published.commit, git.root
             log.append(run_id, EventType.NOTE, "orchestrator",
                        data={"published_commit": commit, "files": len(published.files), "repo": "repo"})
