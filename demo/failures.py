@@ -25,6 +25,7 @@ from warden.dag import Graph
 from warden.llm import LLMClient, LLMTransientError, ScriptedClient
 from warden.orchestrator import Config, Orchestrator, RunSummary
 from warden.policy import YamlPolicy
+from warden.report import write_report
 from warden.tools import Check, CommandResult, VerifyAgent
 
 # A well-formed AWS access key id, assembled at runtime so this file itself stays clean.
@@ -170,4 +171,6 @@ def run_case(name: str, run_dir: str | Path, out: TextIO = sys.stdout) -> Failur
           f"    (model answers scripted; orchestrator, policy and gates real)", file=out, flush=True)
     summary, store, log_path = case.run(directory, out)
     print_summary(summary, directory, None, out)
+    report = write_report(log_path, graph=sdlc_graph(), title=f"Warden failure demo: {case.name}")
+    print(f"Run report:       {report}", file=out, flush=True)
     return FailureResult(summary, store, log_path, directory)

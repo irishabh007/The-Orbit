@@ -31,6 +31,7 @@ from warden.llm import LLMClient
 from warden.models import EventType, RunState
 from warden.orchestrator import Orchestrator, RunSummary
 from warden.policy import YamlPolicy
+from warden.report import write_report
 from warden.tools import GitRepo, VerifyAgent, publish
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -153,6 +154,7 @@ def run_scenario(
     publish_repo: bool = True,
     policy_path: Path = DEFAULT_POLICY,
     out: TextIO = sys.stdout,
+    mode: str = "",  # how the model was used, shown in the report title
 ) -> ScenarioResult:
     run_dir = prepare_run_dir(run_dir)
     run_id = f"{scenario.name}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
@@ -179,7 +181,9 @@ def run_scenario(
             commit, repo = published.commit, git.root
             log.append(run_id, EventType.NOTE, "orchestrator",
                        data={"published_commit": commit, "files": len(published.files), "repo": "repo"})
+    report = write_report(log_path, graph=scenario.graph(), title=f"Warden run report: {scenario.name}" + (f" ({mode})" if mode else ""))
     print_summary(summary, run_dir, commit, out)
+    print(f"Run report:       {report}", file=out, flush=True)
     return ScenarioResult(summary, run_dir, log_path, commit, repo)
 
 

@@ -46,6 +46,9 @@ class FailureDemoTests(unittest.TestCase):
         self.assertEqual(self.events(result, EventType.RETRY_SCHEDULED), [])
         self.assertIsNone(result.store.latest("code.bundle"))
         self.assertNotIn(result.planted_secret, result.log_path.read_text("utf-8"))
+        report = (result.run_dir / "report.md").read_text("utf-8")
+        self.assertIn("DENY", report.split("## Policy decisions", 1)[1])
+        self.assertNotIn(result.planted_secret, report)
 
     def test_human_reject_fails_closed_and_nothing_downstream_runs(self) -> None:
         result = self.run_named("human-reject")

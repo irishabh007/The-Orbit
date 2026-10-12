@@ -68,5 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("At the requirements gate, answer the questions with [c]hanges. Example answers:\n"
               + scenario.answers)
     approver = scenario_approver(scenario, auto=args.auto_approve, name=args.approver)
-    result = run_scenario(scenario, args.out / args.scenario, llm, approver)
+    mode = ("live Gemini" if args.live else "recorded with Gemini, new prompts live" if args.record
+            else "offline replay of recorded model answers; timings exclude model latency")
+    result = run_scenario(scenario, args.out / args.scenario, llm, approver, mode=mode)
     return 0 if result.summary.state == RunState.SUCCEEDED else 1

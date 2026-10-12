@@ -1,0 +1,291 @@
+"""Run report and reliability metrics, computed only from the hash-chained event log.
+
+Nothing here is self-reported by agents: every number is derived from audited events,
+so a reviewer can recompute it. Metrics (all runs in the log):
+
+* run success rate                 runs that finished SUCCEEDED / runs
+* attempt success rate             agent attempts that ended SUCCEEDED / attempts
+* retry / fallback / rollback      counts and rates; repair loops (failure routed upstream)
+* MTTR                             mean time from a node's first failure in an incident to
+                                   its next success (unrecovered incidents counted apart)
+* end-to-end latency               RUN_STARTED -> RUN_FINISHED per run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections import defaultdict
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+from statistics import mean
+from typing import Any
+
+from warden.dag import Graph
+from warden.eventlog import Event, EventLog, VerifyResult
+from warden.models import EventType
+
+_E = EventType
+_TIMELINE_TO = {"RUNNING", "SUCCEEDED", "FAILED", "ROLLED_BACK", "AWAITING_APPROVAL"}
+
+
+def _ts(event: Event) -> datetime:
+    return datetime.fromisoformat(event.ts)
+
+
+def _seconds(a: Event, b: Event) -> float:
+    return round((_ts(b) - _ts(a)).total_seconds(), 3)
+
+
+def _rate(n: int, d: int) -> float | None:
+    return round(n / d, 3) if d else None
+
+
+def compute_metrics(events: Sequence[Event]) -> dict[str, Any]:
+    by_type: dict[str, list[Event]] = defaultdict(list)
+    for e in events:
+        by_type[e.type].append(e)
+    transitions = by_type[_E.NODE_TRANSITION.value]
+
+    runs = []
+    for start in by_type[_E.RUN_STARTED.value]:
+        end = next((e for e in by_type[_E.RUN_FINISHED.value] if e.run_id == start.run_id and e.seq > start.seq), None)
+        runs.append({"run_id": start.run_id, "state": end.data.get("state") if end else "UNFINISHED",
+                     "reason": end.data.get("reason", "") if end else "", "steps": end.data.get("steps") if end else None,
+                     "latency_s": _seconds(start, end) if end else None})
+
+    attempts = [e for e in transitions if e.data.get("to") == "RUNNING"]
+    succeeded = [e for e in transitions if e.data.get("to") == "SUCCEEDED" and not e.data.get("adopted")]
+    failed = [e for e in transitions if e.data.get("to") == "FAILED"]
+    retries = by_type[_E.RETRY_SCHEDULED.value]
+    fallbacks = [e for e in retries if e.data.get("fallback_agent")]
+    rollbacks = by_type[_E.ROLLBACK.value]
+    repair_loops = [e for e in by_type[_E.REPLAN.value] if e.data.get("feedback_to")]
+
+    recovery_times, unrecovered = _incidents(transitions)
+    nodes: dict[str, dict[str, Any]] = {}
+    for e in transitions:
+        n = nodes.setdefault(e.node_id or "?", {"attempts": 0, "failures": 0, "state": None, "duration_ms": None})
+        n["state"] = e.data.get("to")
+        n["attempts"] += e.data.get("to") == "RUNNING"
+        n["failures"] += e.data.get("to") == "FAILED"
+        if e.data.get("to") == "SUCCEEDED" and "duration_ms" in e.data:
+            n["duration_ms"] = e.data["duration_ms"]
+
+    requested = {e.seq: e for e in by_type[_E.APPROVAL_REQUESTED.value]}
+    approvals = []
+    for d in by_type[_E.APPROVAL_DECIDED.value]:
+        req = next((requested[c] for c in d.caused_by if c in requested), None)
+        approvals.append({"node": d.node_id, "verdict": d.data.get("verdict"), "by": d.actor,
+                          "comment": d.data.get("comment", ""), "reason": req.data.get("reason", "") if req else "",
+                          "wait_s": _seconds(req, d) if req else None})
+
+    checks = by_type[_E.POLICY_CHECK.value]
+    rules: dict[str, int] = defaultdict(int)
+    for c in checks:
+        if not c.data.get("allow", True) or c.data.get("requires_approval"):
+            for rule in str(c.data.get("rule") or "unnamed").split(","):
+                rules[rule] += 1
+
+    return {
+        "runs": runs,
+        "run_success_rate": _rate(sum(r["state"] == "SUCCEEDED" for r in runs), len(runs)),
+        "node_attempts": len(attempts),
+        "attempt_success_rate": _rate(len(succeeded), len(attempts)),
+        "failures": len(failed),
+        "retries": len(retries),
+        "retry_rate": _rate(len(retries), len(attempts)),
+        "fallbacks": len(fallbacks),
+        "rollbacks": len(rollbacks),
+        "rollback_rate": _rate(len(rollbacks), len(runs)),
+        "repair_loops": len(repair_loops),
+        "recoveries": len(recovery_times),
+        "unrecovered": unrecovered,
+        "mttr_s": round(mean(recovery_times), 3) if recovery_times else None,
+        "approvals": approvals,
+        "policy": {"denied": sum(not c.data.get("allow", True) for c in checks),
+                   "escalated": sum(bool(c.data.get("requires_approval")) for c in checks),
+                   "rules": dict(sorted(rules.items()))},
+        "nodes": nodes,
+        "events": len(events),
+    }
+
+
+def _incidents(transitions: Sequence[Event]) -> tuple[list[float], int]:
+    """Per node: an incident opens at its first FAILED and closes at its next SUCCEEDED."""
+    open_since: dict[str, Event] = {}
+    times: list[float] = []
+    for e in transitions:
+        node, to = e.node_id or "?", e.data.get("to")
+        if to == "FAILED" and node not in open_since:
+            open_since[node] = e
+        elif to == "SUCCEEDED" and node in open_since:
+            times.append(_seconds(open_since.pop(node), e))
+    return times, len(open_since)
+
+
+# ---------------------------------------------------------------------- rendering
+def _fmt(value: Any, suffix: str = "") -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, float):
+        return f"{value:.0%}" if suffix == "%" else f"{value:g}{suffix}"
+    return f"{value}{suffix}"
+
+
+def _cell(text: Any, limit: int = 140) -> str:
+    one_line = " ".join(str(text).split()).replace("|", "\\|")
+    return one_line if len(one_line) <= limit else one_line[: limit - 3] + "..."
+
+
+def _lineage(events: Sequence[Event], seq: int) -> list[Event]:
+    by_seq = {e.seq: e for e in events}
+    seen: set[int] = set()
+    stack = [seq]
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur not in by_seq:
+            continue
+        seen.add(cur)
+        stack.extend(by_seq[cur].caused_by)
+    return [by_seq[s] for s in sorted(seen)]
+
+
+def render_report(events: Sequence[Event], metrics: dict[str, Any], *, graph: Graph | None = None,
+                  title: str = "Warden run report", audit: VerifyResult | None = None) -> str:
+    if not events:
+        return f"# {title}\n\nNo events.\n"
+    t0 = _ts(events[0])
+    m = metrics
+    lines = [f"# {title}", "", "## Summary", "", "| Run | State | End-to-end latency | Agent executions | Reason |",
+             "|---|---|---|---|---|"]
+    for r in m["runs"]:
+        lines.append(f"| {r['run_id']} | {r['state']} | {_fmt(r['latency_s'], 's')} | {_fmt(r['steps'])} | "
+                     f"{_cell(r['reason'] or '-')} |")
+
+    lines += ["", "## Reliability metrics", "", "| Metric | Value |", "|---|---|"]
+    for label, value in [
+        ("Run success rate", _fmt(m["run_success_rate"], "%")),
+        ("Agent attempts", _fmt(m["node_attempts"])),
+        ("Attempt success rate", _fmt(m["attempt_success_rate"], "%")),
+        ("Failed attempts", _fmt(m["failures"])),
+        ("Retries (rate per attempt)", f"{m['retries']} ({_fmt(m['retry_rate'], '%')})"),
+        ("Fallbacks to a backup agent", _fmt(m["fallbacks"])),
+        ("Rollbacks (per run)", f"{m['rollbacks']} ({_fmt(m['rollback_rate'])})"),
+        ("Repair loops (failure routed upstream)", _fmt(m["repair_loops"])),
+        ("Incidents recovered / unrecovered", f"{m['recoveries']} / {m['unrecovered']}"),
+        ("MTTR (first failure -> recovery)", _fmt(m["mttr_s"], "s")),
+        ("Policy denials / escalations", f"{m['policy']['denied']} / {m['policy']['escalated']}"),
+        ("Audit events", _fmt(m["events"])),
+    ]:
+        lines.append(f"| {label} | {value} |")
+
+    if graph is not None:
+        states = {n: str(info["state"]) for n, info in m["nodes"].items()}
+        lines += ["", "## Workflow", "", "Final state of every node (🔒 = human approval required).", "",
+                  "```mermaid", graph.to_mermaid(states), "```"]
+    else:
+        lines += ["", "## Workflow", "", "_Graph not supplied; see the node table below._"]
+    lines += ["", "| Node | Final state | Attempts | Failures | Last duration |", "|---|---|---|---|---|"]
+    for node, info in m["nodes"].items():
+        lines.append(f"| {node} | {info['state']} | {info['attempts']} | {info['failures']} | "
+                     f"{_fmt(info['duration_ms'], ' ms')} |")
+
+    lines += ["", "## Timeline", "", "| t | Node | Event | Detail |", "|---|---|---|---|"]
+    for e in events:
+        row = _timeline_row(e)
+        if row:
+            lines.append(f"| +{(_ts(e) - t0).total_seconds():.1f}s | {e.node_id or '-'} | {row[0]} | "
+                         f"{_cell(row[1])} |")
+
+    lines += ["", "## Human approvals", ""]
+    if m["approvals"]:
+        lines += ["| Node | Verdict | By | Waited | Why asked | Comment |", "|---|---|---|---|---|---|"]
+        lines += [f"| {a['node']} | {a['verdict']} | {a['by']} | {_fmt(a['wait_s'], 's')} | {_cell(a['reason'])} | "
+                  f"{_cell(a['comment'] or '-')} |" for a in m["approvals"]]
+    else:
+        lines.append("No approval gates were reached.")
+
+    lines += ["", "## Policy decisions", ""]
+    flagged = [e for e in events if e.type == _E.POLICY_CHECK.value
+               and (not e.data.get("allow", True) or e.data.get("requires_approval"))]
+    if flagged:
+        lines += ["| Node | Phase | Decision | Rule | Reason |", "|---|---|---|---|---|"]
+        lines += [f"| {e.node_id} | {e.data.get('phase')} | {'DENY' if not e.data.get('allow', True) else 'escalate'} "
+                  f"| {e.data.get('rule') or '-'} | {_cell(e.data.get('reason', ''))} |" for e in flagged]
+    else:
+        lines.append("Every policy check passed without escalation.")
+
+    lines += ["", "## Decision lineage", ""]
+    final = next((e for e in reversed(events) if e.type == _E.NODE_TRANSITION.value
+                  and e.data.get("to") == "SUCCEEDED"), None)
+    if final is None:
+        lines.append("No node succeeded, so there is no committed decision to trace.")
+    else:
+        chain = _lineage(events, final.seq)
+        humans = [e for e in chain if e.actor.startswith("human:")]
+        intro = (f"The last committed decision (event {final.seq}: `{final.node_id}` SUCCEEDED) traces back "
+                 f"through {len(chain)} causally linked events, including {len(humans)} human decision(s):")
+        lines += [intro, ""]
+        lines += [f"- event {e.seq}: {e.actor} {e.data.get('verdict', '')} on `{e.node_id}`"
+                  + (f": {_cell(e.data.get('comment'), 100)}" if e.data.get("comment") else "") for e in humans]
+        artifacts = [e.data["artifact"] for e in chain if e.type == _E.ARTIFACT_CREATED.value]
+        if artifacts:
+            lines += ["", "Artifacts in the chain: " + ", ".join(f"`{a}`" for a in artifacts)]
+
+    lines += ["", "## Audit integrity", ""]
+    if audit is None:
+        lines.append("Chain not verified for this report.")
+    elif audit.ok:
+        lines.append(f"Hash chain **verified**: {audit.count} events, head hash `{events[-1].hash[:16]}...`. "
+                     "Editing, deleting or reordering any event breaks verification.")
+    else:
+        lines.append(f"**Hash chain BROKEN** at event {audit.bad_seq}: {audit.error}")
+    return "\n".join(lines) + "\n"
+
+
+def _timeline_row(e: Event) -> tuple[str, str] | None:
+    d = e.data
+    if e.type == _E.NODE_TRANSITION.value and d.get("to") in _TIMELINE_TO:
+        return f"{d.get('from')} -> {d.get('to')}", str(d.get("reason") or d.get("agent") or "")
+    if e.type == _E.APPROVAL_DECIDED.value:
+        return f"approval: {d.get('verdict')}", f"{e.actor} {d.get('comment', '')}"
+    if e.type == _E.POLICY_CHECK.value and (not d.get("allow", True) or d.get("requires_approval")):
+        return "policy " + ("DENY" if not d.get("allow", True) else "escalate"), str(d.get("reason", ""))
+    if e.type in (_E.RETRY_SCHEDULED.value, _E.ROLLBACK.value, _E.SAFE_STOP.value):
+        return e.type, str(d.get("reason") or d.get("fallback_agent") or "")
+    if e.type == _E.REPLAN.value:
+        return "REPLAN", str(d.get("reason") or f"invalidated {d.get('invalidated')}")
+    if e.type in (_E.RUN_STARTED.value, _E.RUN_FINISHED.value):
+        return e.type, str(d.get("state") or "")
+    return None
+
+
+def write_report(log_path: str | Path, *, graph: Graph | None = None, title: str | None = None,
+                 out: str | Path | None = None) -> Path:
+    """Read and verify an event log, then write ``report.md`` and ``metrics.json`` beside it."""
+    log_path = Path(log_path)
+    with EventLog(log_path) as log:
+        events, audit = log.read_all(), log.verify()
+    metrics = compute_metrics(events)
+    target = Path(out) if out else log_path.with_name("report.md")
+    target.write_text(render_report(events, metrics, graph=graph, title=title or f"Warden run report: "
+                                    f"{', '.join(r['run_id'] for r in metrics['runs']) or log_path.name}",
+                                    audit=audit), encoding="utf-8")
+    target.with_name("metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+    return target
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m warden.report",
+                                     description="Render a run report and metrics from an event log.")
+    parser.add_argument("log", type=Path, help="events.jsonl")
+    parser.add_argument("-o", "--out", type=Path, help="report path (default: report.md next to the log)")
+    args = parser.parse_args(argv)
+    print(write_report(args.log, out=args.out))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -113,6 +113,30 @@ class ScenarioTests(TmpCase):
         self.assertIn("architect", out.getvalue())  # progress is printed as events happen
         self.assertIn("SUCCEEDED", out.getvalue())
 
+    def test_every_run_writes_a_report_and_metrics(self) -> None:
+        result = run_scenario(load_scenario("greenfield"), self.root / "run", scripted_clients(),
+                              ScriptedApprover(), verifier=passing_verifier(), publish_repo=False,
+                              out=io.StringIO())
+        report = (result.run_dir / "report.md").read_text("utf-8")
+        self.assertIn("## Reliability metrics", report)
+        self.assertIn("```mermaid", report)
+        self.assertIn("Hash chain **verified**", report)
+        metrics = json.loads((result.run_dir / "metrics.json").read_text("utf-8"))
+        self.assertEqual(metrics["run_success_rate"], 1.0)
+
+    @pytest.mark.slow  # spawns a subprocess
+    def test_report_can_be_regenerated_from_any_log(self) -> None:
+        result = run_scenario(load_scenario("greenfield"), self.root / "run", scripted_clients(),
+                              ScriptedApprover(), verifier=passing_verifier(), publish_repo=False,
+                              out=io.StringIO())
+        import subprocess
+        import sys
+        target = self.root / "again.md"
+        proc = subprocess.run([sys.executable, "-m", "warden.report", str(result.log_path), "-o", str(target)],
+                              capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("## Reliability metrics", target.read_text("utf-8"))
+
 
 BROWNFIELD_IMPACT = {
     "summary": "Add daily click analytics.", "change_type": "feature",
