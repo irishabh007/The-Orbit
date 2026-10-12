@@ -200,6 +200,21 @@ class BrownfieldScenarioTests(TmpCase):
         self.assertIn("def get_analytics", clients["developer"].calls[0].prompt)  # existing app/main.py
 
 
+class CliTests(unittest.TestCase):
+    def test_invalid_flag_combinations_fail_before_any_model_call(self) -> None:
+        # found by accident: `--live --prune` started a full live run before rejecting --prune
+        from demo import cli
+
+        def no_model() -> None:
+            raise AssertionError("a model client was created")
+
+        for flags in (["--live", "--prune"], ["--record", "--prune"]):
+            with self.subTest(flags=flags), mock.patch.object(cli, "_gemini", no_model), \
+                    mock.patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(cli.main(["greenfield", *flags]), 2)
+                self.assertIn("--prune", err.getvalue())
+
+
 class ConsoleApproverTests(unittest.TestCase):
     def request(self) -> ApprovalRequest:
         return ApprovalRequest("run1", "architect", "3 components, 5 tasks", ("design.json",),
