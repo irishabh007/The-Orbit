@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (exactly as in the README quick start)
+        run: pip install -r requirements-demo.txt -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Types
+        run: mypy warden demo run_demo.py
+
+      - name: Fast tests
+        run: pytest -q
+
+      - name: Slow tests (real pytest, ruff, git subprocesses)
+        run: pytest -q -m slow --deselect tests/test_demo.py::RecordedGreenfieldTests
+
+      - name: Failure and control demos (scripted, no key)
+        run: python run_demo.py failures
+
+      # Informational: recordings were made on Windows; tool output in repair prompts can differ
+      # across platforms and package versions, which would make replay miss. Reported, not gating.
+      - name: Recorded greenfield replay (informational)
+        continue-on-error: true
+        run: pytest -q -m slow tests/test_demo.py::RecordedGreenfieldTests
+
+      - name: Upload run reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-reports-${{ matrix.os }}
+          path: runs/**/report.md
+          if-no-files-found: ignore
