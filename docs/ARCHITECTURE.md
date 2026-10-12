@@ -129,7 +129,7 @@ These failures are never retried (CLAUDE.md rule 4):
 | Controlled autonomy | policy `autonomy` per role | architect, impact, release: `supervised`; developer: `full`; unknown roles: `supervised` |
 | Human checkpoints | graph `requires_approval` | Architect and release always; spec for vague requests; impact for brownfield |
 | Execution safety | `tools/runner.py` | Generated code runs with an allowlisted environment (no keys) and a timeout |
-| Audit | `eventlog.py` | Hash chain + `caused_by` lineage. The report traces the release back to every human decision |
+| Audit | `eventlog.py`, `tools/git.py` | Hash chain + `caused_by` lineage; the head hash is anchored in each published git commit, so even a full log rewrite is detected. The report traces the release back to every human decision and checks the anchors |
 
 ## Key decisions
 

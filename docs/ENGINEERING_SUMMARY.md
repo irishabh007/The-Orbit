@@ -51,7 +51,7 @@ Two principles shaped most decisions:
 | Secrets or personal data leak into code or logs | Policy denies; reasons never echo the value; the child environment is scrubbed of keys; keys are never logged | Tests assert the secret is absent from the log and report; the child process cannot see the key |
 | Agents exceed their remit | Autonomy per role; protected paths need a human; agents can only add oversight; undeclared outputs are rejected | Policy and orchestrator tests; failure demos |
 | A human decision is not traceable | Approvals are linked into `caused_by` lineage; the report traces the release back to every human decision | Real run: the release lineage reaches all 6 human decisions |
-| Audit log is tampered with | Hash chain; `verify()` locates the break | `test_eventlog.py` |
+| Audit log is tampered with | Hash chain (`verify()` locates the break) plus the head hash anchored in each git commit | `test_eventlog.py` forges a full rewrite that `verify()` accepts and the anchor rejects |
 | Runaway cost or loops | Every loop is bounded; quota errors are not retried; step budget triggers safe-stop | Tests per bound; safe-stop demo |
 | Non-reproducible demos | Record/replay with request-hash keys; normalized tool output; no timings in agent-visible artifacts | Two identical offline replays; slow replay test |
 
@@ -82,8 +82,10 @@ Two principles shaped most decisions:
 - **Recordings:** only greenfield is recorded with the real model. Brownfield and ambiguous are
   built and tested with scripted answers and need one recording session
   ([RECORDING.md](RECORDING.md)).
-- **Tamper-evident, not tamper-proof:** someone who rewrites the whole log and recomputes every
-  hash can forge it. Anchoring the head hash externally would close this.
+- **Anchoring is per published commit:** each feature commit records the audit-log head hash
+  (`Warden-Audit-Head` trailer), so a later full rewrite of the log is detected. Events written
+  after the last commit, and runs that publish nothing (for example a failed run), are protected
+  only by the hash chain until something anchors them.
 - **Not a sandbox:** generated code runs with the user's permissions (scrubbed environment and a
   timeout; no container on the development machine).
 - **Single machine:** one process, one scheduler thread; no distributed workers.

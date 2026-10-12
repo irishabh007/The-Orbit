@@ -68,7 +68,7 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
    misses, consider `-p no:warnings` for verify's pytest and re-record (this invalidates repair-loop
    recordings).
 3. Optional improvements: tokens and cost per model call in the event log (a cost metric in the
-   report); container sandbox for verify; anchoring the log head hash externally; deleting files
+   report); container sandbox for verify; deleting files
    in the generated repo.
 
 Constraint for whoever continues: **changing any agent prompt, schema, input or verify output
