@@ -16,6 +16,11 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(g.descendants("a"), {"b", "c", "d"})
         self.assertEqual(g.ancestors("d"), {"a", "b", "c"})
 
+    def test_failure_replan_targets_must_be_upstream(self) -> None:
+        Graph([n("a"), NodeSpec("b", "agent", ("a",), on_failure_replan=("a",))])
+        with self.assertRaisesRegex(GraphError, "upstream"):
+            Graph([n("a"), n("b"), NodeSpec("c", "agent", ("a",), on_failure_replan=("b",))])
+
     def test_cycle_is_rejected(self) -> None:
         with self.assertRaises(GraphError):
             Graph([n("a", ("c",)), n("b", ("a",)), n("c", ("b",))])

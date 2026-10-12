@@ -54,6 +54,7 @@ class NodeRecord:
     held: bool = False  # rolled back by a human; will not auto-run until released
     committed: dict[str, dict[str, Any]] = field(default_factory=dict)  # artifact -> {version, prev}
     last_event: int | None = None
+    replans: int = 0  # failure-driven re-plan loops used since this node last succeeded
 
 
 @dataclass(frozen=True)
@@ -380,7 +381,7 @@ class Orchestrator:
                                      "created": put.created}, self._own(nid)))
         seq = self._transition(nid, NodeState.SUCCEEDED, events,
                                duration_ms=duration_ms, attempts=rec.attempts)
-        rec.attempts = 0
+        rec.attempts, rec.replans = 0, 0
         if changed:
             self.replan(changed, cause=seq)
 
@@ -401,11 +402,37 @@ class Orchestrator:
                       {"fallback_agent": spec.fallback_agent, "reason": reason}, [seq])
             self._transition(nid, NodeState.READY)
             return
+        if retryable and spec.on_failure_replan and rec.replans < spec.max_replans:
+            self._replan_upstream(nid, reason, seq)
+            return
         self._transition(nid, NodeState.ROLLED_BACK, reason=reason, terminal=True)
         self._log(EventType.ROLLBACK, nid,
                   {"reverted": [], "reason": reason,
                    "note": "staged outputs discarded; nothing had been committed"}, [seq])
         self._halt, self._halt_reason = True, f"{nid}: {reason}"
+
+    def _replan_upstream(self, nid: str, reason: str, cause: int) -> None:
+        """Non-linear recovery: route a failure back to the upstream nodes that can fix it."""
+        spec, rec = self.graph.nodes[nid], self._rec[nid]
+        rec.replans += 1
+        self._transition(nid, NodeState.ROLLED_BACK, reason=reason)
+        for target in spec.on_failure_replan:
+            self._feedback[target] = f"{nid} failed: {reason}"
+        scope = set(spec.on_failure_replan).union(*(self.graph.descendants(t) for t in spec.on_failure_replan))
+        invalidated: list[str] = []
+        for other in self.graph.order:
+            orec = self._rec[other]
+            if other in scope and orec.state == NodeState.SUCCEEDED:
+                self._transition(other, NodeState.STALE, reason=f"re-plan after {nid} failed")
+                self._transition(other, NodeState.PENDING)
+                orec.attempts, orec.used_fallback = 0, False
+                invalidated.append(other)
+        self._transition(nid, NodeState.PENDING, reason="re-planned")
+        rec.attempts, rec.used_fallback = 0, False
+        self._log(EventType.REPLAN, nid,
+                  {"reason": reason, "feedback_to": list(spec.on_failure_replan), "invalidated": invalidated,
+                   "loop": rec.replans, "max_loops": spec.max_replans}, [cause])
+        self._save()
 
     def _discard(self, nid: str, why: str) -> None:
         seq = self._transition(nid, NodeState.FAILED, reason=why)
@@ -429,7 +456,8 @@ class Orchestrator:
         if self._state_path is None:
             return
         payload = {i: {"state": r.state.value, "attempts": r.attempts, "used_fallback": r.used_fallback,
-                       "held": r.held, "committed": r.committed, "last_event": r.last_event}
+                       "held": r.held, "committed": r.committed, "last_event": r.last_event,
+                       "replans": r.replans}
                    for i, r in self._rec.items()}
         tmp = self._state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -442,4 +470,5 @@ class Orchestrator:
         for nid, d in raw.items():
             if nid in self._rec:
                 self._rec[nid] = NodeRecord(NodeState(d["state"]), d["attempts"], d["used_fallback"],
-                                            d["held"], d["committed"], d["last_event"])
+                                            d["held"], d["committed"], d["last_event"],
+                                            d.get("replans", 0))  # absent in older state files

@@ -75,8 +75,12 @@ class OrchestratorTestCase(unittest.TestCase):
             "release": self.agent("release", ("release_report",)),
         }
 
-    def build(self, nodes: list[NodeSpec] | None = None, agents=None, **kw):  # type: ignore[no-untyped-def]
-        kw.setdefault("state_path", self.root / "state.json")
+    def build(self, nodes: list[NodeSpec] | None = None, agents=None, *,  # type: ignore[no-untyped-def]
+              persist: bool = False, **kw):
+        # Persisting state rewrites a file on every transition (slow on Windows); only the
+        # persistence/resume tests need it, everything else runs in memory.
+        if persist:
+            kw.setdefault("state_path", self.root / "state.json")
         return Orchestrator(Graph(nodes or sdlc_nodes()), agents or self.default_agents(),
                             self.store, self.log, "run1", **kw)
 
@@ -280,6 +284,63 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertIsNone(self.store.latest("spec"))
 
 
+class RepairLoopTests(OrchestratorTestCase):
+    """A failing check (e.g. verify) sends feedback upstream and re-runs from there."""
+
+    def verify_nodes(self, max_replans: int = 2) -> list[NodeSpec]:
+        verify = NodeSpec("verify", "verify", ("impl", "tests"), ("code", "test_suite"), ("verify_report",),
+                          max_retries=0, on_failure_replan=("impl",), max_replans=max_replans)
+        release = NodeSpec("release", "release", ("verify", "docs"), ("code", "test_suite", "readme"),
+                           ("release_report",))
+        return [n for n in sdlc_nodes() if n.id != "release"] + [verify, release]
+
+    def agents_with(self, verify_passes_on: int) -> tuple[dict[str, FunctionAgent], list[str | None]]:
+        seen: list[str | None] = []
+
+        def impl(ctx: AgentContext) -> AgentResult:
+            seen.append(ctx.feedback)
+            with self.lock:
+                self.calls["impl"] += 1
+                version = self.calls["impl"]
+            return AgentResult({"code": f"code v{version}"})
+
+        def verify(ctx: AgentContext) -> AgentResult:
+            with self.lock:
+                self.calls["verify"] += 1
+            if self.calls["impl"] < verify_passes_on:
+                raise RuntimeError("2 tests failed: test_r1")
+            return AgentResult({"verify_report": "passed"})
+
+        agents = self.default_agents()
+        agents.update(impl=FunctionAgent("impl", impl), verify=FunctionAgent("verify", verify))
+        return agents, seen
+
+    def test_failure_feeds_back_upstream_and_reruns_until_it_passes(self) -> None:
+        agents, seen = self.agents_with(verify_passes_on=2)
+        summary = self.build(self.verify_nodes(), agents).run()
+        self.assertEqual(summary.state, RunState.SUCCEEDED, summary.reason)
+        self.assertEqual(self.calls["impl"], 2)
+        self.assertEqual(self.calls["tests"], 1)  # not downstream of impl: untouched
+        self.assertIsNone(seen[0])
+        self.assertIn("2 tests failed", seen[1] or "")
+        replans = [e for e in self.types(EventType.REPLAN) if e.data.get("feedback_to")]
+        self.assertEqual(len(replans), 1)
+        self.assertEqual(replans[0].data["feedback_to"], ["impl"])
+
+    def test_repair_loops_are_bounded(self) -> None:
+        agents, _ = self.agents_with(verify_passes_on=99)
+        summary = self.build(self.verify_nodes(max_replans=2), agents).run()
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertEqual(self.calls["impl"], 3)  # first try + 2 repair loops
+        self.assertIn("2 tests failed", summary.reason)
+
+    def test_policy_denial_does_not_trigger_repair(self) -> None:
+        agents, _ = self.agents_with(verify_passes_on=1)
+        summary = self.build(self.verify_nodes(), agents, policy=DenyPolicy(post={"verify"})).run()
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertEqual(self.calls["impl"], 1)
+
+
 class ReplanRollbackAndSafetyTests(OrchestratorTestCase):
     def test_replan_reruns_only_affected_nodes(self) -> None:
         orch = self.build()
@@ -380,18 +441,18 @@ class ReplanRollbackAndSafetyTests(OrchestratorTestCase):
             self.build().adopt("design")
 
     def test_state_persists_and_resumes(self) -> None:
-        self.build().run()
+        self.build(persist=True).run()
         before = Counter(self.calls)
-        resumed = self.build()  # same state_path
+        resumed = self.build(persist=True)  # same state_path
         self.assertTrue(all(s == NodeState.SUCCEEDED.value for s in resumed.states().values()))
         self.assertEqual(resumed.run().state, RunState.SUCCEEDED)
         self.assertEqual(self.calls, before)  # nothing re-ran
 
     def test_interrupted_run_recovers_on_next_start(self) -> None:
-        orch = self.build()
+        orch = self.build(persist=True)
         orch._transition("req", NodeState.READY)
         orch._transition("req", NodeState.RUNNING)  # simulate a crash mid-run
-        recovered = self.build()
+        recovered = self.build(persist=True)
         self.assertEqual(recovered.states()["req"], "RUNNING")
         self.assertEqual(recovered.run().state, RunState.SUCCEEDED)
 

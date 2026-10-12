@@ -41,6 +41,12 @@ class NodeSpec:
     fallback_agent: str | None = None
     entry_gate: EntryGate | None = None
     exit_gate: ExitGate | None = None
+    # When retries/fallback are exhausted, instead of halting: send the failure reason
+    # as feedback to these upstream nodes and re-run them and everything below them
+    # (e.g. verify -> developer). Bounded by max_replans; never for policy denials or
+    # human rejections.
+    on_failure_replan: tuple[str, ...] = ()
+    max_replans: int = 1
 
 
 class Graph:
@@ -66,10 +72,18 @@ class Graph:
                     raise GraphError(f"artifact {art} produced by both {self.producer[art]} and {n.id}")
                 self.producer[art] = n.id
         for n in self.nodes.values():
-            for art in n.consumes:
-                src = self.producer.get(art)
-                if src is not None and src not in self.ancestors(n.id):
-                    raise GraphError(f"{n.id} consumes {art} but {src} is not an upstream dependency")
+            self._check_upstream_refs(n)
+
+    def _check_upstream_refs(self, n: NodeSpec) -> None:
+        """Consumed artifacts and re-plan targets must come from ancestors (parallel safety)."""
+        upstream = self.ancestors(n.id)
+        for art in n.consumes:
+            src = self.producer.get(art)
+            if src is not None and src not in upstream:
+                raise GraphError(f"{n.id} consumes {art} but {src} is not an upstream dependency")
+        for target in n.on_failure_replan:
+            if target not in upstream:
+                raise GraphError(f"{n.id} can only re-plan upstream nodes, {target} is not upstream")
 
     def _toposort(self) -> list[str]:
         indegree = {i: len(n.deps) for i, n in self.nodes.items()}
