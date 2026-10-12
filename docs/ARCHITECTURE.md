@@ -108,16 +108,16 @@ stateDiagram-v2
 
 | Level | Mechanism | Bound |
 |---|---|---|
-| Model call | `RetryingClient`: backoff on rate limits, timeouts and 5xx | 4 attempts; a quota longer than 60s is not retried |
+| Model call | `RetryingClient`: backoff on rate limits, timeouts and 5xx | 4 attempts; a quota longer than 60s, and requests the service refuses (4xx: bad key, billing), are not retried |
 | Agent output | Schema or check errors fed back to the model | 1 repair round |
 | Node | Retry, then the fallback agent | `max_retries` (2), then one fallback |
-| Workflow | Failure routed upstream (verify → developer + tester) | `max_replans` (4) |
+| Workflow | Failure routed upstream (verify → developer + tester) | `max_replans`: 4, or 6 for vague requests |
 | Run | Rollback and halt, or safe-stop (kill switch or step budget) | — |
 
 These failures are never retried (CLAUDE.md rule 4):
 - policy denials
 - human rejections
-- `PermanentAgentError` (daily quota, replay miss)
+- `PermanentAgentError` (daily quota, replay miss, a request the model service refuses)
 
 ## Governance
 
@@ -143,7 +143,7 @@ These failures are never retried (CLAUDE.md rule 4):
 | Lineage | Content-hashed artifacts with input hashes | Precise re-planning; unchanged outputs stop cascades | Timestamps or version counters (over-invalidate) |
 | Audit | Hash-chained JSONL with `caused_by` | Tamper-evident and readable with standard tools | A database (heavier; same evidence) |
 | Many files per agent | One `*.bundle` artifact, expanded for policy checks | Nodes declare outputs up front; file names are not known in advance | Dynamic outputs (break graph validation) |
-| LLM determinism | Record/replay keyed by request hash, with the n-th repeat recorded separately | Reviewers run offline; retries still get fresh answers | Mocking (proves less), always live (cost, flakiness) |
+| LLM determinism | Record/replay keyed by request hash, with the n-th repeat recorded separately; closest-match fallback (≥ 99% alike, same agent) when flaky generated tests change a prompt slightly | Reviewers run offline; retries still get fresh answers | Mocking (proves less), always live (cost, flakiness) |
 | Model | gemini-3.8-flash behind one interface | Free tier for development; swappable | Any provider fits `LLMClient` |
 | Dependencies | Standard library in core; PyYAML for policy; httpx and Pydantic only in adapters | Small trusted core, enforced by a test | — |
 | Generated stack | Stack profiles; .NET (ASP.NET Core + xUnit) by default for new projects | The engine stays stack-agnostic; .NET matches the target role; Python kept so recorded runs stay valid | Hard-coding one stack; rewriting the engine in C# |

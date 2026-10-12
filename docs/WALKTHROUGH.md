@@ -1,46 +1,54 @@
 # Reviewer walkthrough (about 10 minutes)
 
 A guided tour: what to run, where to look, and which evaluation criterion each step addresses.
-Everything runs offline, with no key needed. Setup is the 2-line quick start in the
-[README](../README.md).
+No API key is needed: recorded model answers replay offline. Setup is the quick start in the
+[README](../README.md); the .NET run needs the .NET 10 SDK (and network once, for NuGet). Without
+.NET, use `greenfield-python` in step 1, or read the recorded output directly in
+[evidence/](evidence/).
 
-## 1. Watch a governed run (2 min)
+## 1. Watch a governed run (3 min)
 
 ```bash
-python run_demo.py greenfield-python --auto-approve
+python run_demo.py greenfield --auto-approve
 ```
 
 The live feed shows each event as the orchestrator writes it. Look for:
 
-- **Decomposition:** `requirements` turns the brief into 9 requirements and asks 2 blocking
-  questions, which escalate to a human. `architect` plans 12 traced tasks.
+- **Decomposition:** `requirements` turns the brief into 10 requirements and asks 3 blocking
+  questions, which escalate to a human. `architect` plans 13 traced tasks.
 - **Parallel paths and a join:** `developer`, `tester` and `docs` run at the same time; `verify`
   waits for code and tests; `release` waits for verify and docs.
-- **Policy escalation:** `developer` is escalated because it writes `requirements.txt`, a protected
-  path.
-- **Non-linear recovery:** `verify` fails twice. Each time the failing test output goes back to the
-  developer and tester (`REPLAN`), and the third verification passes.
+- **Policy escalation:** `developer` and `tester` are escalated because they write `*.csproj` and
+  `appsettings*.json`, protected paths.
+- **Non-linear recovery:** `verify` runs the real `dotnet build` and `dotnet test` and fails four
+  times (3, 3, 27, then 30 of 31 tests passing). Each time a digest of the failures, grouped by root
+  cause, goes back to the developer and tester (`REPLAN`), and the fifth verification passes 31 of 31.
 - **Human final call:** `release` waits for approval.
 
 *Criteria: effectiveness of agentic orchestration; depth of decomposition and execution.*
 
 ## 2. Read the evidence (3 min)
 
-Open `runs/greenfield/report.md` (VS Code: Ctrl+Shift+V renders the Mermaid diagram).
+Open `runs/greenfield/report.md`, or the committed copy in
+[evidence/greenfield/report.md](evidence/greenfield/report.md) (VS Code: Ctrl+Shift+V renders the
+Mermaid diagram).
 
 | Section | What it proves |
 |---|---|
-| Reliability metrics | Computed from the audit log alone: 100% run success, 14 agent attempts (79% succeeded), 2 repair loops, 2 incidents recovered, MTTR |
-| Model usage and cost | 12 model calls, tokens and estimated cost per agent |
+| Reliability metrics | Computed from the audit log alone: 100% run success, 19 agent attempts (79% succeeded), 4 repair loops, MTTR |
+| Model usage and cost | 14 model calls, tokens and estimated cost per agent (about $1.12) |
 | Workflow | The dependency graph with each node's final state; 🔒 marks human gates |
 | Timeline | Every transition, retry, policy decision and approval |
 | Human approvals | Who decided, why they were asked, how long they took |
-| Decision lineage | The release decision traced through 77 causally linked events back to all 6 human decisions and every artifact version |
+| Decision lineage | The release decision traced through 122 causally linked events back to all 13 human decisions and every artifact version |
 | Audit integrity | Hash chain verified, and the head hash anchored in the generated repo's git commit |
 
-Then look at the output itself: `runs/greenfield/repo` is a plain git repository (FastAPI app, 30
-tests, README, docs) with no dependency on Warden. `git log` shows one commit listing the
-requirements, the approvals, and the `Warden-Audit-Head` trailer.
+Then look at the output itself: `runs/greenfield/repo` (committed copy:
+[evidence/greenfield/repo](evidence/greenfield/repo/)) is a plain .NET solution (ASP.NET Core API,
+31 xUnit tests, README, docs) with no dependency on Warden; `dotnet test tests` runs on its own.
+`git log` shows one commit listing the requirements, the approvals, and the `Warden-Audit-Head`
+trailer. The other two scenarios are in [evidence/](evidence/): brownfield (with the diff against
+the existing app) and ambiguous (a bounded, safe failure).
 
 *Criteria: realism and quality of outputs; audit-grade observability.*
 
@@ -70,7 +78,8 @@ Each case writes its own `runs/failures/<case>/report.md`.
 python run_demo.py greenfield-python
 ```
 
-At each gate you can:
+(The Python run has fewer gates than the .NET one, which makes it quicker to drive by hand.) At each
+gate you can:
 
 - **a** approve
 - **n** approve with a note (kept in the audit log, the report and the commit message)
@@ -103,13 +112,13 @@ Anything outside the plan you approved comes back to you first.
 pytest -q && pytest -q -m slow && ruff check . && mypy warden demo run_demo.py
 ```
 
-These run 297 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`), including the recorded run replayed end to end
-with the real generated tests executing. Then skim:
+These run 311 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`, and
+a recorded run replayed end to end with the real generated tests executing). Then skim:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): state machine, per-attempt control flow, bounded failure
   handling, key decisions with alternatives.
 - [ENGINEERING_SUMMARY.md](ENGINEERING_SUMMARY.md): risks with how each is validated, assumptions,
-  honest limitations, and **15 defects found only by real runs and environment probes**, each fixed
+  honest limitations, and **19 defects found only by real runs and environment probes**, each fixed
   with a regression test.
 
 *Criteria: architecture quality; validation and risk rigor; defensible decisions; engineering

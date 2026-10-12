@@ -6,41 +6,46 @@ work, how it is orchestrated, and how the result is validated.
 
 ## 1. Greenfield: URL shortener (recorded)
 
-`python run_demo.py greenfield --auto-approve` replays the recorded .NET run (ASP.NET Core minimal API, EF Core + SQLite, xUnit;
-31 tests, passing after 4 repair loops: 3 -> 3 -> 27 -> 30 -> 31);
-`python run_demo.py greenfield-python --auto-approve` replays the recorded run below, made on the Python
-stack with the same brief. The request is in
+`python run_demo.py greenfield --auto-approve` replays the recorded .NET run. The request is in
 [demo/requests/greenfield.md](../demo/requests/greenfield.md): shorten, redirect, analytics, health
-check, custom aliases, expiry, SSRF protection, rate limiting, persistence.
+check, custom aliases, expiry, SSRF protection, rate limiting, persistence. Unedited output:
+[evidence/greenfield/](evidence/greenfield/).
 
-**Decomposition** (from the recorded gemini-3.8-flash run)
-- Requirements: 9 numbered requirements (8 must, 1 should), each with acceptance criteria, plus
-  assumptions and 4 clarifying questions (2 blocking, each with a proposed default).
-- Architect: 8 components, 4 endpoints, 4 decisions with rejected alternatives, 3 risks, and
-  **12 tasks** with owners and dependencies, each traced to requirement IDs. Every must
+**Decomposition** (recorded gemini-3.8-flash run)
+- Requirements: 10 numbered requirements (all must), each with acceptance criteria, plus
+  assumptions and 4 clarifying questions (3 blocking, each with a proposed default).
+- Architect: 14 components, 4 endpoints, 4 decisions with rejected alternatives, 3 risks, and
+  **13 tasks** with owners and dependencies, each traced to requirement IDs. Every must
   requirement is checked to have a task, and dependency cycles are rejected.
 
 **Orchestration**
 - Requirements escalated to a human because of the blocking questions. With auto-approve, the
   proposed defaults were accepted.
 - Architect required approval (graph) and was escalated by policy (`supervised`).
-- Developer, tester and docs ran **in parallel** from the approved design. The developer was
-  escalated because it writes `requirements.txt`, a protected path.
-- Verify ran the generated tests and lint. It **failed twice**, and each failure went back to both
-  developer and tester as feedback:
-  - Repair loop 1: 3 failing tests and 5 lint errors.
-  - Repair loop 2: 1 failing test.
-  - The developer's next revision had a syntax error, which the agent's own check caught. A
-    retry, still carrying the feedback, fixed it. Verify then passed.
+- Developer, tester and docs ran **in parallel** from the approved design (contract-first: the
+  tester works from the design, not the code). Developer and tester were escalated on every
+  attempt because they write `*.csproj` and `appsettings*.json`, protected paths.
+- Verify ran `dotnet build` and `dotnet test`. Failures are turned into a short digest grouped by
+  root cause (from the TRX results), which goes back to both developer and tester:
+  - 3/31 passing: 28 tests failed on one cause (the test host's fixture constructor).
+  - 3/31: the fix introduced a second constructor, which xUnit rejects.
+  - 27/31: tests shared one SQLite database ("table already exists").
+  - 30/31: one persistence test.
+  - 31/31: verify passed after 4 repair loops (the budget is 4).
 - Release recommended "ready", and a human made the final call.
 
-**Validation:** 30 generated tests pass, ruff is clean, and the release checklist cites evidence
-for every must requirement. The report shows 14 agent executions, 2 repair loops, 2 incidents
-recovered (MTTR is computed from the log), and 6 human decisions in the lineage of the release.
+**Validation:** 31 xUnit tests pass, and the release checklist cites evidence for every must
+requirement. The report shows 19 agent executions, 4 repair loops, 12 policy escalations, and 13
+human decisions in the lineage of the release.
 
-**Output:** `runs/greenfield/repo` contains an `app/` package (config, database, service,
-security/SSRF, rate limiter, JSON logging), 4 test modules, a README and `docs/`, about 1,800 lines
-in one commit whose message lists the requirements and approvals.
+**Output:** `runs/greenfield/repo`: `src/App` (minimal API endpoints, EF Core context, link,
+code-generator and URL-validation services, rate limiting) and `tests/` (xUnit with
+`WebApplicationFactory`), a README and `docs/`; 23 files, about 2,000 lines, in one commit whose
+message lists the requirements and approvals. It passes `dotnet test tests` on its own.
+
+**Same brief on the Python stack:** `python run_demo.py greenfield-python --auto-approve` replays an
+earlier recorded run (FastAPI + sqlite3 + pytest): 9 requirements, 12 tasks, 30 generated tests
+passing after 2 repair loops, 18 files. It shows the stack is a pluggable profile, not hard-coded.
 
 ## 2. Brownfield: daily click analytics on the existing app (recorded)
 
@@ -50,9 +55,9 @@ in one commit whose message lists the requirements and approvals.
 greenfield output, frozen in `demo/baselines/url-shortener-dotnet.json`.
 
 **Decomposition**
-- `scan` (static analysis with `ast`, nothing executes) builds `codebase.json`: modules, the
-  import graph and reverse dependencies (blast radius), endpoints from route decorators, and which
-  tests cover which modules.
+- `scan` (static analysis, nothing executes) builds `codebase.json` from the C# sources: files,
+  types, `using` dependencies and reverse dependencies (blast radius), endpoints from `Map*` route
+  calls, and which tests cover which files. (The Python stack uses `ast` for the same map.)
 - `impact` produces `impact.json`: affected modules, endpoints, data, tests and docs; a risk level;
   regression tests. It is **grounded**: claiming to modify a module, endpoint or test that is not in
   `codebase.json` is rejected.
@@ -68,6 +73,11 @@ greenfield output, frozen in `demo/baselines/url-shortener-dotnet.json`.
 **Validation:** verify runs the existing **and** new tests together, so a regression fails the
 gate. Release reviews against the spec and the impact analysis. Tested end to end with scripted
 answers (`tests/test_demo.py::BrownfieldScenarioTests`).
+
+**Recorded outcome:** 8 requirements, an impact analysis signed off by a human, 8 tasks. The first
+build failed on a C# syntax error; one repair loop fixed it and verify passed **50 of 50** tests
+(the existing suite, revised where the feature changed behaviour, plus the new tests). Released; the diff against the existing app is in
+[evidence/brownfield/change.diff](evidence/brownfield/change.diff).
 
 ## 3. Ambiguous: "make links safer and give marketing better insights" (recorded; ends FAILED)
 

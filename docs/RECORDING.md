@@ -17,7 +17,7 @@ that it replays, then commit it.
 ## Steps (per scenario)
 
 ```bash
-python run_demo.py brownfield --record --auto-approve     # 1. record (re-run until it SUCCEEDS)
+python run_demo.py brownfield --record --auto-approve     # 1. record (re-run if the model service fails mid-run)
 python run_demo.py brownfield --auto-approve              # 2. replay offline, without network or key
 python run_demo.py brownfield --auto-approve              # 3. replay again: the outcome must match
 ```
@@ -53,11 +53,15 @@ Then run steps 2-6 above for each scenario, and commit `recordings/` plus
 
 ## Current status
 
-| Scenario | Recorded |
-|---|---|
-| greenfield (.NET) | No: step 1 above |
-| brownfield (.NET) | No: needs the greenfield baseline first (step 2), then step 3 |
-| ambiguous (.NET) | No: step 4 |
-| greenfield-python | Yes (12 calls, gemini-3.8-flash) |
-| failures | Not needed (scripted) |
-| new | Recorded automatically to `recordings/<project>/` whenever you run it with a key |
+| Scenario | Recorded | Replays to |
+|---|---|---|
+| greenfield (.NET) | Yes (14 calls) | SUCCEEDED: 31/31 tests, released |
+| brownfield (.NET) | Yes (10 calls), on the greenfield baseline | SUCCEEDED: 50/50 tests, released |
+| ambiguous (.NET) | Yes (23 calls) | FAILED: 6-loop repair budget spent, nothing released (kept as recorded) |
+| greenfield-python | Yes (12 calls) | SUCCEEDED: 30 tests, released |
+| failures | Not needed (scripted) | 8 demos |
+| new | Recorded automatically to `recordings/<project>/` whenever you run it with a key | |
+
+`--prune` only runs after a successful replay. The ambiguous recordings were pruned the same way
+(replay, then delete what the replay did not use) after checking that the replay reproduced the
+recorded failure.

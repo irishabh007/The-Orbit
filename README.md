@@ -46,18 +46,20 @@ Leave out `--auto-approve` to make every approval decision yourself at the termi
 a gate to see what you are approving). For a guided 10-minute tour, see
 [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md).
 
-## What one run produces (recorded `greenfield-python` run, gemini-3.8-flash)
+## What one run produces (recorded .NET `greenfield` run, gemini-3.8-flash)
 
 | | |
 |---|---|
 | Input | A one-page brief for a URL shortener |
-| Decomposition | 9 requirements with acceptance criteria, 4 clarifying questions (2 blocking), 12 tasks traced to requirements |
-| Execution | 7 governed nodes, 14 agent attempts; developer, tester and docs in parallel |
-| Recovery | Verify failed twice (3 failing tests → 1 → 0), each time routed back to developer and tester |
-| Governance | 6 human decisions, 5 policy escalations, 0 denials; the release decision traces back to all 6 |
-| Output | 18 files (~1,800 lines): FastAPI app with SSRF protection, rate limiting, expiry, analytics; 30 passing tests; README and docs |
-| Cost | 12 model calls, ~132k input and ~77k output tokens, about $0.39 at list price |
+| Decomposition | 10 requirements with acceptance criteria, 4 clarifying questions (3 blocking), 13 tasks traced to requirements |
+| Execution | 7 governed nodes, 19 agent attempts; developer, tester and docs in parallel |
+| Recovery | Verify failed four times (3 → 3 → 27 → 30 of 31 tests passing), each failure routed back to developer and tester; the fifth run passed 31 of 31 |
+| Governance | 13 human decisions, 12 policy escalations (10 protected paths, 2 autonomy), 0 denials; the release decision traces back through 122 linked events to all 13 |
+| Output | ASP.NET Core minimal API (EF Core + SQLite, SSRF protection, rate limiting, expiry, analytics), 31 xUnit tests, README and docs: 23 files, ~2,000 lines |
+| Cost | 14 model calls, about $1.12 at list price (thinking tokens included) |
 | Audit | Hash-chained log, verified; head hash anchored in the generated repo's git commit |
+
+All of it, unedited, is in [docs/evidence/](docs/evidence/).
 
 ## Scenarios
 
@@ -88,8 +90,8 @@ The .NET stack needs the .NET 10 SDK; package restore needs network access the f
 
 ## Model modes
 
-- **Replay** (default): uses `recordings/<scenario>/`. Needs no key and no network, and gives the
-  same result every time.
+- **Replay** (default): uses `recordings/<scenario>/`. Needs no key, and gives the same result
+  every time. (The .NET scenarios need network once, for the NuGet package restore.)
 - **`--record`**: calls Gemini only for prompts that have no recording yet, then saves the answers.
 - **`--live`**: calls Gemini every time and records nothing.
 
@@ -106,7 +108,7 @@ For `--record` and `--live`, put `GEMINI_API_KEY=...` in `.env` (the file is git
 | [Evidence](docs/evidence/) | Reports, audit logs and generated code from the three recorded .NET runs |
 | [Testing](docs/TESTING.md) | Testing approach, how to run it, what each layer proves |
 | [Engineering summary](docs/ENGINEERING_SUMMARY.md) | Plan and rationale, artifacts, risks and trade-offs, assumptions, limitations, lessons from real runs |
-| [Recording runbook](docs/RECORDING.md) | Recording the remaining scenarios with a paid key |
+| [Recording runbook](docs/RECORDING.md) | How the scenarios were recorded, and how to re-record one |
 
 ## Repository layout
 

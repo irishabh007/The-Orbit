@@ -41,11 +41,11 @@ orchestrator can start from any point (brownfield).
 | CI | GitHub Actions on Ubuntu + Windows: fresh install, lint, types, tests, demos |
 | Claims | Narrow and defensible: "production-grade structure and practices", not "any requirement, fully production-ready" |
 
-## 3. Status (2026-10-12): development complete
+## 3. Status (2026-10-13): development complete
 
-All handoff items 1-9 are implemented and test-proven: 297 fast tests and 11 slow ones, with ruff and
+All handoff items 1-9 are implemented and test-proven: 311 fast tests and 11 slow ones, with ruff and
 mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
-`docs/ENGINEERING_SUMMARY.md`, which also lists the 15 defects found by real runs and environment probes.
+`docs/ENGINEERING_SUMMARY.md`, which also lists the 19 defects found by real runs and environment probes.
 
 | Item | State |
 |---|---|
@@ -54,7 +54,7 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 | 3 LLM layer | Done: Gemini, record/replay (n-th repeat recorded separately, prune), scripted, bounded retry, quota-aware errors |
 | 4 Agents | Done: Requirements, Impact, Architect (+ plan), Developer, Tester, Docs, Release |
 | 5 Tools | Done: verify, scanner, workspace writer, scrubbed runner, git, publish |
-| 6 Demo and scenarios | Done: greenfield (**recorded**, Python stack), brownfield and ambiguous (**built; not recorded**), 8 failure/control demos, `run_demo.py new` (interactive intake + discovery Q&A, .NET by default) |
+| 6 Demo and scenarios | Done: greenfield, brownfield, ambiguous (**recorded on .NET**; ambiguous ends in a bounded failure), greenfield-python (recorded), 8 failure/control demos, `run_demo.py new` (interactive intake + discovery Q&A, .NET by default); unedited output in `docs/evidence/` |
 | Stacks | Done: `warden/stacks.py` profiles `dotnet-aspnetcore` (default for new projects; verified with real dotnet build/test) and `python-fastapi` |
 | Scope guard | Done: policy `scope` stops anything outside the approved plan for a human |
 | 7 Run report | Done: metrics and report from the audit log, `python -m warden.report` |
@@ -80,7 +80,7 @@ See `docs/ENGINEERING_SUMMARY.md#limitations-stated-honestly`.
 | Brief requirement | Status | Evidence |
 |---|---|---|
 | 1 Requirement understanding | Done | Requirements agent; recorded .NET runs; ambiguous scenario asks blocking questions and folds the answers in; `run_demo.py new` discovery Q&A |
-| 2 Task decomposition | Done | Architect tasks with owners, dependencies, traceability; real run: 12 tasks |
+| 2 Task decomposition | Done | Architect tasks with owners, dependencies, traceability; .NET greenfield: 13 tasks |
 | 3 Brownfield codebase reasoning | Done | C# scanner + grounded impact agent; recorded .NET brownfield run ([evidence](evidence/brownfield/)) |
 | 4 DAG, gates, parallel + joins | Done | `dag.py`, orchestrator tests |
 | 4 Lineage | Done | `caused_by` + content hashes; report traces the release to every human decision |
