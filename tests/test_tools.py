@@ -84,6 +84,14 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
         self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
 
+    def test_safe_env_keeps_system_folders_dotnet_needs(self) -> None:
+        # found by probing: NuGet fails ("Value cannot be null, path1") without these
+        fake = {"PATH": "/bin", "PROGRAMDATA": "C:\\ProgramData", "PROGRAMFILES": "C:\\Program Files"}
+        with mock.patch.dict(os.environ, fake, clear=True):
+            env = safe_env()
+        self.assertEqual(env["PROGRAMDATA"], "C:\\ProgramData")
+        self.assertEqual(env["DOTNET_CLI_TELEMETRY_OPTOUT"], "1")
+
 
 class VerifyAgentTests(TmpCase):
     def setUp(self) -> None:
@@ -139,6 +147,22 @@ class VerifyAgentTests(TmpCase):
         first = VerifyAgent(self.checks, runner=runner_taking(5)).run(self.ctx).outputs["verify_report.json"]
         second = VerifyAgent(self.checks, runner=runner_taking(9000)).run(self.ctx).outputs["verify_report.json"]
         self.assertEqual(first, second)
+
+    def test_a_check_can_require_evidence_that_tests_ran(self) -> None:
+        # found by probing: `dotnet test` exits 0 when nothing was built or run
+        check = Check("tests", ("dotnet", "test"), requires=r"Total:\s*[1-9]")
+        for output, expected in (("Passed!  - Failed: 0, Passed: 3, Skipped: 0, Total: 3", True),
+                                 ("", False), ("No test is available", False)):
+            with self.subTest(output=output):
+                agent = VerifyAgent((check,), runner=FakeRunner(0, output=output))
+                self.assertEqual(self.report(agent.run(self.ctx))["passed"], expected)
+
+    def test_dotnet_timings_are_normalized(self) -> None:
+        def runner(argv: Sequence[str], cwd: Path, timeout: float) -> CommandResult:
+            return CommandResult(tuple(argv), 1, "Time Elapsed 00:00:07.59\nFailed!  - Total: 3, Duration: 37 ms", 5)
+
+        tail = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))["checks"][0]["output_tail"]
+        self.assertEqual(tail, "Time Elapsed <t>\nFailed!  - Total: 3, Duration: <t>")
 
     def test_long_output_is_truncated_to_the_tail(self) -> None:
         runner = FakeRunner(1, output="x" * 10_000 + "THE END")

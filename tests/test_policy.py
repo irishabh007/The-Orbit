@@ -199,6 +199,36 @@ class ComplianceRuleTests(unittest.TestCase):
             YamlPolicy.from_dict(rules(compliance={"pii_patterns": [{"name": "x", "regex": "x", "luhn": "yes"}]}))
 
 
+CSPROJ = """<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    {extra}
+  </ItemGroup>
+</Project>
+"""
+
+
+class NugetDependencyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = YamlPolicy.from_dict(rules(dependencies={
+            "manifests": ["*.csproj"], "allowed": [], "nuget_allowed": ["Microsoft.EntityFrameworkCore.Sqlite"]}))
+
+    def check(self, content: str) -> Any:
+        name = "src/App/App.csproj"
+        return self.policy.check_post(node(produces=("code.bundle",)), AgentResult({"code.bundle": pack({name: content})}))
+
+    def test_allowlisted_package_references_pass(self) -> None:
+        self.assertTrue(self.check(CSPROJ.format(extra="")).allow)
+
+    def test_unlisted_package_is_denied(self) -> None:
+        decision = self.check(CSPROJ.format(extra='<PackageReference Include="Leftpad.Net" Version="1.0.0" />'))
+        self.assertFalse(decision.allow)
+        self.assertIn("Leftpad.Net", decision.reason)
+
+    def test_unparseable_project_file_is_denied(self) -> None:
+        self.assertFalse(self.check("<Project><oops").allow)
+
+
 class BundleExpansionTests(unittest.TestCase):
     """Bundles (many files in one artifact) are checked file by file."""
 
@@ -282,6 +312,18 @@ class DefaultPolicyTests(unittest.TestCase):
     def test_catches_personal_data_in_test_fixtures(self) -> None:
         self.assertFalse(self.post("tester", {"tests/data.py": f"SSN = '{FAKE_SSN}'\n"}).allow)
         self.assertFalse(self.post("tester", {"tests/data.py": f"CARD = '{VALID_CARD}'\n"}).allow)
+
+    def test_dotnet_project_and_settings_files_need_approval(self) -> None:
+        for path in ("src/App/App.csproj", "src/App/appsettings.json", "src/App/Migrations/0001_Init.cs"):
+            with self.subTest(path=path):
+                self.assertTrue(self.post("developer", {path: "<Project />"}).requires_approval)
+
+    def test_default_nuget_allowlist_covers_the_dotnet_stack(self) -> None:
+        packages = "".join(f'<PackageReference Include="{p}" Version="1.0.0" />' for p in (
+            "Microsoft.EntityFrameworkCore.Sqlite", "Microsoft.AspNetCore.Mvc.Testing", "xunit",
+            "xunit.runner.visualstudio", "Microsoft.NET.Test.Sdk", "coverlet.collector"))
+        decision = self.post("developer", {"tests/Tests.csproj": f"<Project><ItemGroup>{packages}</ItemGroup></Project>"})
+        self.assertTrue(decision.allow, decision.reason)
 
     def test_ci_workflow_needs_approval(self) -> None:
         self.assertTrue(self.post("developer", {".github/workflows/ci.yml": "on: push\n"}).requires_approval)

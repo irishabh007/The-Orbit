@@ -32,6 +32,7 @@ from warden.models import EventType, RunState
 from warden.orchestrator import Orchestrator, RunSummary
 from warden.policy import YamlPolicy
 from warden.report import write_report
+from warden.stacks import PYTHON, StackProfile
 from warden.tools import GitRepo, VerifyAgent, publish
 from warden.tools.git import ANCHOR_TRAILER
 
@@ -54,6 +55,7 @@ class Scenario:
     graph: Callable[[], Graph] = sdlc_graph
     baseline: dict[str, str] | None = None  # existing repo files (brownfield), path -> text
     answers: str | None = None  # scripted human answers to clarifying questions (ambiguous)
+    stack: StackProfile = PYTHON  # technology of the generated project (recorded scenarios: Python)
 
 
 # scenario -> (baseline snapshot under demo/baselines, graph); others are greenfield-shaped
@@ -172,7 +174,7 @@ def run_scenario(
     if scenario.baseline is not None and publish_repo:  # history: existing code first, then the change
         publish(store, PUBLISHED, git, "chore: import existing codebase (brownfield baseline)\n")
     with ConsoleEventLog(log_path, out=out) as log:
-        orch = Orchestrator(scenario.graph(), build_agents(wrap_roles(clients, out), verifier=verifier), store, log,
+        orch = Orchestrator(scenario.graph(), build_agents(wrap_roles(clients, out), verifier=verifier, stack=scenario.stack), store, log,
                             run_id, policy=YamlPolicy.from_file(policy_path), approver=approver,
                             state_path=run_dir / "state.json")
         summary = orch.run()

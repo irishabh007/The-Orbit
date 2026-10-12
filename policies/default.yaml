@@ -39,7 +39,7 @@ compliance:
 # list these packages. pip options (-e, --index-url) and direct URLs are denied.
 # Extend the allowlist through a reviewed change to this file.
 dependencies:
-  manifests: ['requirements*.txt', 'pyproject.toml']
+  manifests: ['requirements*.txt', 'pyproject.toml', '*.csproj']
   allowed:
     - fastapi
     - uvicorn
@@ -52,6 +52,20 @@ dependencies:
     - pytest-asyncio
     - ruff
     - mypy
+  # .NET stack (PackageReference in *.csproj). Names are case-insensitive.
+  nuget_allowed:
+    - Microsoft.AspNetCore.OpenApi
+    - Microsoft.AspNetCore.Mvc.Testing
+    - Microsoft.EntityFrameworkCore
+    - Microsoft.EntityFrameworkCore.Sqlite
+    - Microsoft.EntityFrameworkCore.InMemory
+    - Microsoft.EntityFrameworkCore.Design
+    - Microsoft.Data.Sqlite
+    - Microsoft.NET.Test.Sdk
+    - xunit
+    - xunit.v3
+    - xunit.runner.visualstudio
+    - coverlet.collector
 
 # Change control: outputs at these paths need human approval before commit.
 # fnmatch semantics: '*' also matches '/', so 'migrations/*' covers subfolders.
@@ -64,6 +78,12 @@ protected_paths:
   - '.env*'
   - 'requirements*.txt'
   - 'pyproject.toml'
+  - '*.csproj'
+  - '*.sln'
+  - '*.slnx'
+  - 'Directory.*.props'
+  - '*appsettings*.json'
+  - '*Migrations/*'
 
 # Controlled autonomy per agent role (NodeSpec.agent): full | supervised | none.
 # A fallback agent runs under its node's role. Unknown roles get the default.

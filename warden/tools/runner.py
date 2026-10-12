@@ -16,7 +16,11 @@ from pathlib import Path
 
 # Only what interpreters and git need to start; everything else (keys, tokens) is dropped.
 _KEEP = {"PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
-         "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL", "TZ"}
+         "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL", "TZ",
+         # system folders the .NET SDK and NuGet resolve at startup (paths, not secrets)
+         "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES",
+         "COMMONPROGRAMFILES(X86)", "ALLUSERSPROFILE", "HOMEDRIVE", "HOMEPATH", "PUBLIC",
+         "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS", "DOTNET_ROOT", "NUGET_PACKAGES"}
 
 
 @dataclass(frozen=True)
@@ -37,7 +41,8 @@ Runner = Callable[[Sequence[str], Path, float], CommandResult]
 
 def safe_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k.upper() in _KEEP}
-    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1",
+               DOTNET_CLI_TELEMETRY_OPTOUT="1", DOTNET_NOLOGO="1", DOTNET_SKIP_FIRST_TIME_EXPERIENCE="1")
     env.update(extra or {})
     return env
 

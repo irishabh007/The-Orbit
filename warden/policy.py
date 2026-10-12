@@ -9,8 +9,9 @@ retrying a policy violation just burns budget.
                        a secret pattern. Reasons name the pattern and line, never the match.
 * ``compliance``       post: deny personal data (e.g. SSNs, payment cards with a Luhn check)
                        in outputs; generated code and fixtures must not carry real PII.
-* ``dependencies``     post: deny dependency manifests that list a package outside the
-                       allowlist, use pip options, direct URLs, or cannot be parsed.
+* ``dependencies``     post: deny dependency manifests (requirements, pyproject, *.csproj) that
+                       list a package outside its allowlist (pip / NuGet), use pip options,
+                       direct URLs, or cannot be parsed.
 * ``protected_paths``  post: escalate to human approval when an output path matches.
 * ``autonomy``         per agent role: ``full`` (auto-commit), ``supervised`` (commit needs
                        human approval) or ``none`` (denied before running).
@@ -32,6 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from xml.etree import ElementTree
 
 import yaml  # the one third-party dependency allowed in core (see CLAUDE.md rule 7)
 
@@ -155,9 +157,11 @@ class YamlPolicy:
         default_autonomy: str,
         autonomy_roles: dict[str, str],
         pii_patterns: dict[str, tuple[re.Pattern[str], bool]] | None = None,  # name -> (regex, luhn)
+        nuget_packages: set[str] | None = None,  # allowlist for *.csproj PackageReference (normalized)
     ) -> None:
         self.secret_patterns = secret_patterns
         self.pii_patterns = pii_patterns or {}
+        self.nuget_packages = nuget_packages or set()
         self.manifests = manifests
         self.allowed_packages = allowed_packages
         self.protected_paths = protected_paths
@@ -188,9 +192,10 @@ class YamlPolicy:
         pii = _patterns(_section(raw, "compliance", {"pii_patterns"}).get("pii_patterns", []),
                         "compliance.pii_patterns", allow_luhn=True)
 
-        deps = _section(raw, "dependencies", {"manifests", "allowed"})
+        deps = _section(raw, "dependencies", {"manifests", "allowed", "nuget_allowed"})
         manifests = _str_list(deps.get("manifests", []), "dependencies.manifests")
         allowed = {_normalize_pkg(p) for p in _str_list(deps.get("allowed", []), "dependencies.allowed")}
+        nuget = {_normalize_pkg(p) for p in _str_list(deps.get("nuget_allowed", []), "dependencies.nuget_allowed")}
         protected = [_normalize_path(p) for p in _str_list(raw.get("protected_paths", []), "protected_paths")]
 
         autonomy = _section(raw, "autonomy", {"default", "roles"})
@@ -203,7 +208,7 @@ class YamlPolicy:
                 raise PolicyError(f"{where}: unknown autonomy level {level!r}, expected one of {AUTONOMY_LEVELS}")
 
         return cls(patterns, manifests, allowed, protected, default, {str(k): v for k, v in roles.items()},
-                   pii_patterns=pii)
+                   pii_patterns=pii, nuget_packages=nuget)
 
     # ---- checks --------------------------------------------------------
     def autonomy(self, role: str) -> str:
@@ -285,11 +290,28 @@ class YamlPolicy:
                 continue
             if base == "pyproject.toml":
                 problems = self._pyproject_problems(f.text)
+            elif base.endswith(".csproj"):
+                problems = self._csproj_problems(f.text)
             else:
                 lines = (_COMMENT.sub("", raw).strip() for raw in f.text.splitlines())
                 problems = [p for line in lines if line and (p := self._requirement_problem(line))]
             for problem in problems:
                 yield _Finding("dependencies", f"{f.label}: {problem}", deny=True)
+
+    def _csproj_problems(self, text: str) -> list[str]:
+        """NuGet PackageReference entries in an MSBuild project must be on the NuGet allowlist."""
+        try:
+            root = ElementTree.fromstring(text)  # stdlib expat: no external entities are fetched
+        except ElementTree.ParseError as exc:
+            return [f"unparseable project file ({exc})"]
+        problems = []
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "PackageReference":
+                continue
+            package = element.get("Include") or element.get("Update") or ""
+            if _normalize_pkg(package) not in self.nuget_packages:
+                problems.append(f"NuGet package not in allowlist: {package or '(unnamed)'}")
+        return problems
 
     def _pyproject_problems(self, text: str) -> list[str]:
         try:

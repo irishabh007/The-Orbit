@@ -23,6 +23,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"   # generated .NET projects are verified with dotnet build/test
+
       - name: Install (exactly as in the README quick start)
         run: pip install -r requirements-demo.txt -r requirements-dev.txt
 

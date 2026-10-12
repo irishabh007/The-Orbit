@@ -20,13 +20,19 @@ from typing import Any
 
 from warden.agent import AgentContext, AgentResult
 from warden.dag import GateResult
-from warden.tools.runner import Runner, run_command
+from warden.tools.runner import CommandResult, Runner, run_command
 from warden.tools.workspace import collect_bundles, write_files
 
 REPORT = "verify_report.json"
 _TAIL = 3000  # characters of output kept per check
 _GATE_TAIL = 4000  # characters of failing output fed back to the agents
 _DURATION = re.compile(r"\bin \d+(?:\.\d+)?s\b")
+# .NET timing lines: "Time Elapsed 00:00:07.59", "Duration: 37 ms", "(in 1.2 sec)"
+_DOTNET_TIMINGS = (
+    (re.compile(r"Time Elapsed \d{2}:\d{2}:\d{2}(?:\.\d{1,7})?"), "Time Elapsed <t>"),
+    (re.compile(r"Duration: \d{1,9}(?:\.\d{1,9})? ?(?:ms|s|m|h)\b"), "Duration: <t>"),
+    (re.compile(r"\(in \d{1,9}(?:\.\d{1,9})? ?(?:ms|sec|s)\)"), "(in <t>)"),
+)
 
 
 def normalize_output(text: str, scratch: Path) -> str:
@@ -39,6 +45,8 @@ def normalize_output(text: str, scratch: Path) -> str:
         text = text.replace(root + os.sep, "./").replace(root, ".")
     if os.sep == "\\":
         text = text.replace("\\", "/")
+    for pattern, replacement in _DOTNET_TIMINGS:
+        text = pattern.sub(replacement, text)
     return _DURATION.sub("in <t>s", text)
 
 
@@ -46,6 +54,12 @@ def normalize_output(text: str, scratch: Path) -> str:
 class Check:
     name: str
     argv: tuple[str, ...]
+    # regex the output must match for the check to pass (exit code 0 alone can be a false green,
+    # e.g. `dotnet test` exits 0 when nothing was built or run)
+    requires: str | None = None
+
+    def passed(self, result: CommandResult) -> bool:
+        return result.ok and (self.requires is None or re.search(self.requires, result.output) is not None)
 
 
 DEFAULT_CHECKS = (
@@ -78,7 +92,8 @@ class VerifyAgent:
                 # no timings in the report: downstream agents read it, and anything that varies
                 # between runs changes their prompts and breaks replay (the event log has timings)
                 results.append({"name": check.name, "command": " ".join(check.argv[1:] or check.argv),
-                                "passed": res.ok, "returncode": res.returncode, "timed_out": res.timed_out,
+                                "passed": check.passed(res), "returncode": res.returncode,
+                                "timed_out": res.timed_out,
                                 "output_tail": normalize_output(res.output, scratch)[-_TAIL:]})
         passed = all(r["passed"] for r in results)
         report = {"passed": passed, "files": len(files), "checks": results}

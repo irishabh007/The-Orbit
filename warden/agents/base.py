@@ -20,6 +20,7 @@ from warden.agent import AgentContext, AgentResult
 from warden.agents.schemas import FileBundle
 from warden.bundle import BundleError, is_bundle, pack, unpack
 from warden.llm import LLMClient, LLMRequest
+from warden.stacks import PYTHON, StackProfile
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -54,15 +55,22 @@ class StructuredAgent(Generic[M]):
     schema: ClassVar[type[BaseModel]]
     output: ClassVar[str]
     kind: ClassVar[str]
-    role: ClassVar[str]  # system prompt
-    task: ClassVar[str]  # what to produce, appended to the user prompt
+    role: str  # system prompt (a stack profile may override it per instance)
+    task: str  # what to produce, appended to the user prompt (overridable per stack)
     # how to act on feedback; only added when there is feedback, so first prompts (and
     # their recordings) do not change when this guidance is tuned
     feedback_hint: ClassVar[str] = ""
 
-    def __init__(self, llm: LLMClient, *, repair_attempts: int = 1) -> None:
+    def __init__(self, llm: LLMClient, *, repair_attempts: int = 1, stack: StackProfile = PYTHON) -> None:
         self.llm = llm
         self.repair_attempts = repair_attempts
+        self.stack = stack
+        # a stack profile may replace this role's prompts; the Python profile replaces none
+        override = stack.prompts.get(self.name, {})
+        if "role" in override:
+            self.role = override["role"]
+        if "task" in override:
+            self.task = override["task"]
 
     # ---- hooks for roles -------------------------------------------------
     def builtin_checks(self, model: M) -> list[str]:
@@ -159,19 +167,15 @@ class BundleAgent(StructuredAgent[FileBundle]):
     schema = FileBundle
 
     def builtin_checks(self, model: FileBundle) -> list[str]:
-        """Python files must parse. ``compile`` only parses: nothing generated is executed here.
+        """The stack's in-agent syntax check (Python: ``compile``, which only parses).
 
         A syntax error found here costs one repair call; found by verify it costs a whole
         repair loop (both authors regenerate, then the tests run again).
         """
-        problems = []
-        for f in model.files:
-            if f.path.endswith(".py"):
-                try:
-                    compile(f.content, f.path, "exec", dont_inherit=True)
-                except SyntaxError as exc:
-                    problems.append(f"{f.path}:{exc.lineno}: syntax error: {exc.msg}")
-        return problems
+        check = self.stack.syntax_check
+        if check is None:
+            return []
+        return [problem for f in model.files if (problem := check(f.path, f.content))]
 
     def render(self, model: FileBundle) -> dict[str, str | bytes]:
         return {self.output: pack({f.path: f.content for f in model.files})}

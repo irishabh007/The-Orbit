@@ -68,3 +68,95 @@ ANSWERS: dict[str, dict[str, Any]] = {
 
 def js(obj: Any) -> str:
     return json.dumps(obj)
+
+
+# ---------------------------------------------------------------- .NET (dotnet-aspnetcore)
+# A tiny but real ASP.NET Core minimal API + xUnit project: verify really builds and tests it.
+DOTNET_APP_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
+"""
+
+DOTNET_PROGRAM = """using System.Collections.Concurrent;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+var links = new ConcurrentDictionary<string, string>();
+
+app.MapPost("/shorten", (ShortenRequest request) =>
+{
+    if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+    {
+        return Results.UnprocessableEntity(new { error = "url must be http or https" });
+    }
+    var code = Convert.ToHexString(Guid.NewGuid().ToByteArray())[..7].ToLowerInvariant();
+    links[code] = request.Url;
+    return Results.Created($"/{code}", new { code });
+});
+
+app.MapGet("/{code}", (string code) =>
+    links.TryGetValue(code, out var url) ? Results.Redirect(url) : Results.NotFound());
+
+app.Run();
+
+public record ShortenRequest(string Url);
+
+public partial class Program { }
+"""
+
+DOTNET_TESTS_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../src/App/App.csproj" />
+  </ItemGroup>
+</Project>
+"""
+
+DOTNET_TEST = """using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+
+public class ShortenerTests : IClassFixture<WebApplicationFactory<Program>>
+{
+    private readonly HttpClient _client;
+
+    public ShortenerTests(WebApplicationFactory<Program> factory) =>
+        _client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+    [Fact]
+    public async Task R1_Shorten_ReturnsCreatedWithCode()
+    {
+        var response = await _client.PostAsJsonAsync("/shorten", new { url = "https://example.com" });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task R2_UnknownCode_ReturnsNotFound()
+    {
+        var response = await _client.GetAsync("/nope");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+}
+"""
+
+DOTNET_CODE = bundle({"src/App/App.csproj": DOTNET_APP_CSPROJ, "src/App/Program.cs": DOTNET_PROGRAM})
+DOTNET_TESTS = bundle({"tests/Tests.csproj": DOTNET_TESTS_CSPROJ, "tests/ShortenerTests.cs": DOTNET_TEST})
+DOTNET_ANSWERS: dict[str, dict[str, Any]] = {**ANSWERS, "developer": DOTNET_CODE, "tester": DOTNET_TESTS}

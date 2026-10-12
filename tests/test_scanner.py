@@ -65,6 +65,48 @@ class ScanFilesTests(unittest.TestCase):
                          json.dumps(self.result, sort_keys=True))
 
 
+CSHARP = {
+    "src/App/Program.cs": (
+        "using App.Data;\nusing App.Services;\n\nvar builder = WebApplication.CreateBuilder(args);\n"
+        "var app = builder.Build();\napp.MapPost(\"/shorten\", (ShortenRequest r, LinkService s) => s.Create(r));\n"
+        "app.MapGet(\"/{code}\", (string code) => Results.Ok());\napp.Run();\npublic partial class Program { }\n"
+    ),
+    "src/App/Services/LinkService.cs": (
+        "using App.Data;\n\nnamespace App.Services;\n\npublic sealed class LinkService\n{\n}\n"
+        "public record ShortenRequest(string Url);\n"
+    ),
+    "src/App/Data/AppDbContext.cs": "namespace App.Data;\n\npublic class AppDbContext\n{\n}\n",
+    "src/App/Controllers/AnalyticsController.cs": (
+        "using Microsoft.AspNetCore.Mvc;\nusing App.Services;\n\nnamespace App.Controllers;\n\n"
+        "[ApiController]\n[Route(\"api/analytics\")]\npublic class AnalyticsController : ControllerBase\n{\n"
+        "    [HttpGet(\"{code}\")]\n    public IActionResult Get(string code) => Ok();\n}\n"
+    ),
+    "tests/LinkTests.cs": "using App.Services;\n\nnamespace Tests;\n\npublic class LinkTests\n{\n}\n",
+}
+
+
+class CSharpScanTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from warden.tools.scanner import scan_csharp
+        self.result = scan_csharp(CSHARP)
+        self.modules = {m["path"]: m for m in self.result["modules"]}
+
+    def test_endpoints_from_minimal_apis_and_controllers(self) -> None:
+        endpoints = {(e["method"], e["path"]) for e in self.result["endpoints"]}
+        self.assertEqual(endpoints, {("POST", "/shorten"), ("GET", "/{code}"), ("GET", "/api/analytics/{code}")})
+
+    def test_types_and_namespace_dependencies(self) -> None:
+        self.assertEqual(self.modules["src/App/Services/LinkService.cs"]["classes"],
+                         ["LinkService", "ShortenRequest"])
+        self.assertIn("src/App/Data/AppDbContext.cs", self.modules["src/App/Services/LinkService.cs"]["imports_internal"])
+        self.assertIn("Microsoft.AspNetCore.Mvc",
+                      self.modules["src/App/Controllers/AnalyticsController.cs"]["imports_external"])
+
+    def test_blast_radius_and_test_coverage(self) -> None:
+        self.assertIn("src/App/Program.cs", self.result["dependents"]["src/App/Data/AppDbContext.cs"])
+        self.assertEqual(self.result["tests"]["tests/LinkTests.cs"], ["src/App/Services/LinkService.cs"])
+
+
 class ScanAgentTests(unittest.TestCase):
     def test_scans_consumed_bundles_into_codebase_json(self) -> None:
         import tempfile

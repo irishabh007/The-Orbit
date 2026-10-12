@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import ast
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from warden.agent import AgentContext, AgentResult
@@ -121,13 +122,77 @@ def _dependents(modules: list[dict[str, Any]]) -> dict[str, list[str]]:
     return result
 
 
+# --------------------------------------------------------------------------- C#
+# Regex-based (no C# parser in the standard library): good enough to ground impact analysis
+# in real files, routes and dependencies; not a compiler. Patterns use bounded repeats.
+_CS_NAMESPACE = re.compile(r"^\s*namespace\s+([\w.]{1,200})\s*[;{]", re.MULTILINE)
+_CS_USING = re.compile(r"^\s*(?:global\s+)?using\s+(?!static\b)(?:\w{1,100}\s*=\s*)?([\w.]{1,200})\s*;", re.MULTILINE)
+_CS_TYPE = re.compile(r"\b(?:class|record|interface|struct|enum)\s+(\w{1,100})")
+_CS_METHOD = re.compile(r"\bpublic\s+(?:static\s+|async\s+|virtual\s+|override\s+){0,4}[\w<>\[\],.?]{1,100}\s+(\w{1,100})\s*\(")
+_CS_MAP = re.compile(r"\.Map(Get|Post|Put|Patch|Delete)\(\s*\"([^\"\n]{0,300})\"")
+_CS_ROUTE = re.compile(r"\[Route\(\s*\"([^\"\n]{0,300})\"\s*\)\]")
+_CS_HTTP = re.compile(r"\[Http(Get|Post|Put|Patch|Delete)(?:\(\s*\"([^\"\n]{0,300})\"\s*\))?\]")
+
+
+def _join_route(prefix: str, sub: str) -> str:
+    parts = [p.strip("/") for p in (prefix, sub) if p and p.strip("/")]
+    return "/" + "/".join(parts)
+
+
+def _cs_endpoints(text: str, path: str) -> list[dict[str, str]]:
+    found = [{"method": m.upper(), "path": _join_route("", route), "handler": "minimal-api", "module": path}
+             for m, route in _CS_MAP.findall(text)]
+    prefix_match = _CS_ROUTE.search(text)
+    prefix = prefix_match.group(1) if prefix_match else ""
+    for match in _CS_HTTP.finditer(text):
+        handler = _CS_METHOD.search(text, match.end())
+        found.append({"method": match.group(1).upper(), "path": _join_route(prefix, match.group(2) or ""),
+                      "handler": handler.group(1) if handler else "?", "module": path})
+    return found
+
+
+def scan_csharp(files: Mapping[str, str]) -> dict[str, Any]:
+    cs = {p: t for p, t in files.items() if p.endswith(".cs")}
+    declares: dict[str, set[str]] = {}
+    for path, text in cs.items():
+        for ns in _CS_NAMESPACE.findall(text):
+            declares.setdefault(ns, set()).add(path)
+    modules: list[dict[str, Any]] = []
+    endpoints: list[dict[str, str]] = []
+    for path in sorted(cs):
+        text = cs[path]
+        usings = _CS_USING.findall(text)
+        internal = sorted({f for ns in usings for f in declares.get(ns, set()) if f != path})
+        modules.append({
+            "path": path,
+            "classes": sorted(set(_CS_TYPE.findall(text))),
+            "functions": sorted(set(_CS_METHOD.findall(text))),
+            "imports_internal": internal,
+            "imports_external": sorted({ns for ns in usings if ns not in declares}),
+            "lines": text.count("\n") + 1,
+        })
+        endpoints.extend(_cs_endpoints(text, path))
+    return {
+        "modules": modules,
+        "endpoints": sorted(endpoints, key=lambda e: (e["module"], e["path"], e["method"])),
+        "dependents": _dependents(modules),
+        "tests": {m["path"]: [d for d in m["imports_internal"] if not _is_test(d)]
+                  for m in modules if _is_test(m["path"])},
+        "other_files": sorted(p for p in files if not p.endswith(".cs")),
+        "parse_errors": [],
+    }
+
+
 class ScanAgent:
     """Deterministic tool agent: consumed bundles -> ``codebase.json``."""
 
     name = "scan"
 
+    def __init__(self, scan: Callable[[Mapping[str, str]], dict[str, Any]] = scan_files) -> None:
+        self.scan = scan
+
     def run(self, ctx: AgentContext) -> AgentResult:
-        data = scan_files(collect_bundles(ctx.store, ctx.consumes))
+        data = self.scan(collect_bundles(ctx.store, ctx.consumes))
         summary = (f"{len(data['modules'])} modules, {len(data['endpoints'])} endpoints, "
                    f"{len(data['tests'])} test files, {len(data['parse_errors'])} parse errors")
         return AgentResult({OUTPUT: json.dumps(data, indent=2, sort_keys=True)}, kind="analysis", summary=summary)

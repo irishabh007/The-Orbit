@@ -178,13 +178,7 @@ files again, changing only what the failures require.
 """
 
     def check(self, model: FileBundle, inputs: dict[str, str]) -> list[str]:
-        paths = {f.path for f in model.files}
-        problems = [f"{p}: tests belong to the tester" for p in sorted(paths) if p.startswith("tests/")]
-        if "requirements.txt" not in paths:
-            problems.append("requirements.txt is missing")
-        if not any(p.endswith(".py") for p in paths):
-            problems.append("no Python source files")
-        return problems
+        return self.stack.developer_rules([f.path for f in model.files])
 
 
 class TesterAgent(BundleAgent):
@@ -208,11 +202,7 @@ developer receives the same failures and fixes the code. Return the full set of 
 """
 
     def check(self, model: FileBundle, inputs: dict[str, str]) -> list[str]:
-        paths = [f.path for f in model.files]
-        problems = [f"{p}: tests must live under tests/" for p in paths if not p.startswith("tests/")]
-        if not any(p.rsplit("/", 1)[-1].startswith("test_") and p.endswith(".py") for p in paths):
-            problems.append("no tests/test_*.py file")
-        return problems
+        return self.stack.tester_rules([f.path for f in model.files])
 
 
 class DocsAgent(BundleAgent):

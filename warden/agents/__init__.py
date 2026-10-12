@@ -27,6 +27,7 @@ from warden.agents.roles import (
 )
 from warden.dag import Graph, NodeSpec
 from warden.llm import LLMClient
+from warden.stacks import PYTHON, StackProfile
 from warden.tools import REPORT, ScanAgent, VerifyAgent, verify_gate
 
 ROLE_CLASSES = (RequirementsAgent, ImpactAgent, ArchitectAgent, DeveloperAgent, TesterAgent, DocsAgent,
@@ -34,7 +35,7 @@ ROLE_CLASSES = (RequirementsAgent, ImpactAgent, ArchitectAgent, DeveloperAgent, 
 
 
 def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: int = 1,
-                 verifier: VerifyAgent | None = None) -> dict[str, Agent]:
+                 verifier: VerifyAgent | None = None, stack: StackProfile = PYTHON) -> dict[str, Agent]:
     """Agents for the LLM roles plus the tool agents (scan, verify).
 
     Pass one client for every role, or a mapping role -> client to build only those roles
@@ -48,9 +49,9 @@ def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: i
             client = llm[cls.name]
         else:
             client = llm
-        agents[cls.name] = cls(client, repair_attempts=repair_attempts)
-    agents["verify"] = verifier or VerifyAgent()
-    agents["scan"] = ScanAgent()
+        agents[cls.name] = cls(client, repair_attempts=repair_attempts, stack=stack)
+    agents["verify"] = verifier or VerifyAgent(stack.verify_checks)
+    agents["scan"] = ScanAgent(stack.scan)
     return agents
 
 
