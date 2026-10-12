@@ -241,6 +241,34 @@ class ConsoleApproverTests(unittest.TestCase):
         self.assertEqual(decision.verdict, "approve")
         self.assertIn("FastAPI over SQLite", out.getvalue())
 
+    def test_approval_notes_appear_in_the_commit_message(self) -> None:
+        from demo.runner import _commit_message
+        from warden.approval import ApprovalDecision
+        from warden.artifacts import ArtifactStore
+        from warden.eventlog import EventLog
+        with tempfile.TemporaryDirectory() as tmp:
+            note = ApprovalDecision("approve", "alice", "OK, but revisit rate limits before launch")
+            result = run_scenario(load_scenario("greenfield"), Path(tmp) / "run", scripted_clients(),
+                                  ScriptedApprover({"architect": [note]}), verifier=passing_verifier(),
+                                  publish_repo=False, out=io.StringIO())
+            with EventLog(result.log_path) as log:
+                message = _commit_message(ArtifactStore(result.run_dir / "artifacts"), log,
+                                          log.read_all()[0].run_id)
+        self.assertIn("- architect: approve by human:alice: OK, but revisit rate limits before launch", message)
+
+    def test_approve_with_a_note_keeps_the_comment(self) -> None:
+        decision, shown = self.decide("n", "", "OK, but revisit rate limits before launch")
+        self.assertEqual((decision.verdict, decision.comment),  # type: ignore[attr-defined]
+                         ("approve", "OK, but revisit rate limits before launch"))
+        for option in ("approve with a note", "request changes", "reject", "view"):
+            self.assertIn(option, shown)
+
+    def test_whole_words_are_accepted(self) -> None:
+        decision, _ = self.decide("Changes", "split the service module")
+        self.assertEqual(decision.verdict, "changes")  # type: ignore[attr-defined]
+        decision, _ = self.decide("approve")
+        self.assertEqual((decision.verdict, decision.comment), ("approve", ""))  # type: ignore[attr-defined]
+
     def test_changes_require_a_comment_and_bad_input_reprompts(self) -> None:
         decision, _ = self.decide("maybe", "c", "", "add rate limiting")
         self.assertEqual((decision.verdict, decision.comment),  # type: ignore[attr-defined]

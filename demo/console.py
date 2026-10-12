@@ -13,7 +13,18 @@ from warden.eventlog import Event, EventLog
 from warden.llm import LLMClient, LLMRequest, LLMResponse
 from warden.models import EventType
 
-_VERDICTS = {"a": "approve", "r": "reject", "c": "changes"}
+# first letter of the answer -> (verdict, follow-up question for the comment; "" = no comment)
+_CHOICES = {
+    "a": ("approve", ""),
+    "n": ("approve", "Note to record with your approval: "),
+    "c": ("changes", "What should change? (sent to the agent, which redoes the work): "),
+    "r": ("reject", "Reason for rejecting: "),
+}
+_MENU = """  [a] approve
+  [n] approve with a note    (recorded in the audit log, report and commit; does not block)
+  [c] request changes        (your comment goes back to the agent, which redoes the work)
+  [r] reject                 (stops this path; a reason is required)
+  [v] view outputs           (see what you are approving first)"""
 
 
 class ConsoleEventLog(EventLog):
@@ -72,21 +83,21 @@ class ConsoleApprover:
         print(f"Artifacts: {', '.join(request.artifacts)}", file=p)
         print(f"Summary:   {request.summary}", file=p)
         print("=" * 78, file=p, flush=True)
-        options = "[a]pprove / [r]eject / [c]hanges requested" + (" / [v]iew outputs" if request.preview else "")
+        print(_MENU, file=p, flush=True)
         while True:
-            answer = self._input(f"{options}: ").strip().lower()[:1]
-            if answer in _VERDICTS:
+            answer = self._input("Your choice [a/n/c/r/v]: ").strip().lower()[:1]
+            if answer in _CHOICES:
                 break
-            if answer == "v" and request.preview:
-                for name, excerpt in request.preview:
+            if answer == "v":
+                for name, excerpt in request.preview or (("(none)", "No preview available for this step."),):
                     print(f"\n--- {name} ---\n{excerpt}", file=p)
                 print(file=p, flush=True)
                 continue
-            print("Please answer a, r or c" + (" (or v to view)." if request.preview else "."), file=p, flush=True)
-        verdict = _VERDICTS[answer]
+            print("Please choose a, n, c, r or v.", file=p, flush=True)
+        verdict, question = _CHOICES[answer]
         comment = ""
-        while verdict != "approve" and not comment:
-            comment = self._input("Comment (required): ").strip()
+        while question and not comment:
+            comment = self._input(question).strip()
         return ApprovalDecision(verdict, self.name, comment)  # type: ignore[arg-type]
 
 

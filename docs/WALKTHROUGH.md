@@ -70,8 +70,15 @@ Each case writes its own `runs/failures/<case>/report.md`.
 python run_demo.py greenfield
 ```
 
-At each gate, press **v** to see the staged spec, design or file list before deciding. Approving
-every gate follows the recorded path. A different decision takes the run down a path that has no
+At each gate you can:
+
+- **a** approve
+- **n** approve with a note (kept in the audit log, the report and the commit message)
+- **c** request changes: your comment goes back to the agent, which redoes the work
+- **r** reject, with a reason
+- **v** view the staged spec, design or file list first
+
+Approving every gate follows the recorded path. A different decision takes the run down a path that has no
 recording yet, so replay stops with a clear message (`--record` with a key explores it live).
 
 *Criterion: humans own oversight, approvals and final quality.*
