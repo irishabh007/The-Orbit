@@ -281,6 +281,17 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertEqual(seen, [None, "add rate limits", "add rate limits"])
         self.assertNotIn("design", orch._feedback)  # cleared once the node succeeded
 
+    def test_commit_lineage_includes_the_human_decision(self) -> None:
+        # found while building the run report: the approval was logged but not linked, so
+        # tracing a committed artifact back never reached the human who allowed it
+        nodes = sdlc_nodes(design=NodeSpec("design", "design", ("req",), ("spec",), ("design",),
+                                           requires_approval=True))
+        approver = ScriptedApprover({"design": [ApprovalDecision("approve", "alice", "ok")]})
+        self.build(nodes, approver=approver).run()
+        final = next(e for e in self.log.read_all() if e.node_id == "release" and e.data.get("to") == "SUCCEEDED")
+        actors = {e.actor for e in self.log.lineage(final.seq)}
+        self.assertIn("human:alice", actors)
+
     def test_changes_requested_feeds_comment_back_then_approves(self) -> None:
         seen: list[str | None] = []
 

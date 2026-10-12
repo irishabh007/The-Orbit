@@ -355,9 +355,11 @@ class Orchestrator:
             self._transition(nid, NodeState.AWAITING_APPROVAL)
             decision: ApprovalDecision = self.approver.decide(
                 ApprovalRequest(self.run_id, nid, result.summary, tuple(sorted(result.outputs)), why))
-            self._log(EventType.APPROVAL_DECIDED, nid,
-                      {"verdict": decision.verdict, "comment": decision.comment},
-                      [req], actor=f"human:{decision.approver}")
+            # the decision becomes this node's latest cause, so whatever follows (commit or
+            # failure) links back to the human who made it: decision lineage reaches people
+            self._rec[nid].last_event = self._log(
+                EventType.APPROVAL_DECIDED, nid, {"verdict": decision.verdict, "comment": decision.comment},
+                [req], actor=f"human:{decision.approver}")
             if decision.verdict == "reject":
                 self._fail(nid, f"rejected by {decision.approver}: {decision.comment}", retryable=False)
                 return
