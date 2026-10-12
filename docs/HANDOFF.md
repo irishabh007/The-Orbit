@@ -52,11 +52,21 @@ orchestrator can start from any point (brownfield).
   `RecordReplayClient` (one JSON file per request hash; replay misses fail closed, errors never
   recorded); `GeminiClient` (httpx, key in header, scrubbed from errors and repr, transient vs
   permanent errors, no internal retries). Only `llm/gemini.py` may import httpx (test-enforced)
+- `agents/`: Requirements, Architect (+ planning), Developer, Tester, Docs, Release reviewer.
+  JSON-mode prompts validated by strict Pydantic schemas plus cross-artifact checks (tasks cite real
+  requirement ids, every must requirement has a task, no task cycles, role-scoped file paths);
+  one repair round with the errors fed back, then `AgentOutputError` -> orchestrator retry.
+  `sdlc_graph()`: requirements -> architect (approval) -> developer | tester | docs -> release
+  (approval). Blocking clarifying questions escalate to a human (`AgentResult.escalate`; agents can
+  only add oversight); answers come back as 'changes' feedback
+- `bundle.py`: code/tests/docs travel as one `*.bundle` artifact (safe relative paths only); the
+  policy engine expands bundles so secrets/dependency/protected-path rules see every file
 - `orchestrator.py`: parallel scheduling with joins, retry -> fallback -> rollback, approvals,
   safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
   brownfield entry, persistence/resume
 
-**Known gaps:** no real agents; no CLI; no report/metrics; no docs beyond this.
+**Known gaps:** agents never run against a real model yet
+(no recordings); generated files are not yet written to disk or executed (item 5); no CLI; no report/metrics; no docs beyond this.
 
 ## 4. Remaining work, in priority order
 
@@ -68,7 +78,7 @@ Each item is done only when a test demonstrates it.
    Pre and post checks; denials are never retried.
 3. ~~**LLM layer**~~ Done. (`warden/llm/`): `LLMClient` protocol; Gemini adapter via httpx (key from `.env`);
    record/replay backend keyed by hash of prompt; scripted backend. Never log keys.
-4. **Agents** (`warden/agents/`): Requirements (vague text -> numbered requirements, acceptance
+4. ~~**Agents**~~ Done (`warden/agents/`): Requirements (vague text -> numbered requirements, acceptance
    criteria, assumptions, clarifying questions), Architect (needs approval), Planner, Developer,
    Tester, Docs, Release reviewer (human makes the final call). Strict Pydantic output schemas.
 5. **Tools:** sandboxed file writer (workspace only, protected paths), git adapter (commit per
@@ -101,12 +111,15 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - Policy secret scanning is regex-based: it catches common key formats and literal credential
   assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
   `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
-- Test suite runs at about 1.7s on the dev laptop (Windows), close to the 2s budget; per-file I/O
+- Test suite runs at about 2.1s on the dev laptop (Windows), just over the 2s budget (pydantic import
+  ~0.2s, orchestrator state saves ~1.2s); per-file I/O
   (state saves on every transition) dominates. `EventLog` keeps its append handle open, so callers
   must `close()` it (or use `with`) when done
 - Recordings are keyed on the request only, not the model: a recording made with one Gemini model
   replays under another (the recording file names the model that produced it)
-- LLM calls are not yet in the event log (tokens, latency, backend); agents should report them
+- LLM calls are not yet in the event log (tokens, latency, backend); deferred to the improvement pass
+- Tester writes tests from the design in parallel with the Developer (contract-first). Mismatches are
+  only caught when the verify step runs both (item 5), which must route failures back to the developer
 
 ## 6. Assessment alignment (update with every item)
 
@@ -116,24 +129,24 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 
 | Brief requirement | Status | Where / evidence | Next |
 |---|---|---|---|
-| 1. Requirement understanding (intent, ambiguity, normalized problem) | todo | | Requirements agent (item 4), ambiguous scenario (item 6) |
-| 2. Task decomposition (tasks, dependencies, sequencing) | partial | `dag.py` graph model + validation | Planner agent emits the plan (item 4) |
+| 1. Requirement understanding (intent, ambiguity, normalized problem) | partial | `RequirementsAgent`: numbered requirements, acceptance criteria, assumptions, blocking questions escalate; `test_agents.py` | Real-model recordings; ambiguous scenario (item 6) |
+| 2. Task decomposition (tasks, dependencies, sequencing) | done | `dag.py`; `ArchitectAgent` tasks with owners, `depends_on`, requirement traceability, cycle + coverage checks | Shown in run report (item 7) |
 | 3. Brownfield codebase reasoning (impacted modules/APIs/data flows) | partial | `Orchestrator.adopt()` mid-graph entry | AST scanner + impact analysis (items 5, 6) |
 | 4a. Explicit DAG with entry/exit gates | done | `dag.py`; `test_dag.py`, gate tests in `test_orchestrator.py` | |
 | 4b. Sequential + parallel paths with synchronization | done | barrier and join tests in `test_orchestrator.py` | |
 | 4c. Cross-stage context and decision lineage | done | artifact input hashes, `caused_by` lineage tests | |
-| 4d. Human approval for high-impact actions | done | `approval.py`, node + policy escalation tests | Interactive CLI approver (item 6) |
+| 4d. Human approval for high-impact actions | done | `approval.py`; node, policy and agent escalation tests | Interactive CLI approver (item 6) |
 | 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests` | Failure demo (item 6) |
 | 4f. Policy guardrails: security | done | secrets + dependency allowlist, `test_policy.py` | Secret scanner tool on files (item 5) |
 | 4f. Policy guardrails: change control | done | protected paths + autonomy levels, `test_policy.py` | |
 | 4f. Policy guardrails: compliance | **gap** | only indirect (tamper-evident audit log, recorded approvals) | Decide an explicit compliance rule (e.g. PII in code/fixtures, license allowlist, required release sign-off) |
-| 4g. Audit-grade observability and traceability | partial | hash-chained `eventlog.py`, `verify()` | Run report with timeline + lineage (item 7); LLM calls in the log (item 4) |
+| 4g. Audit-grade observability and traceability | partial | hash-chained `eventlog.py`, `verify()` | Run report with timeline + lineage (item 7); LLM calls in the log (deferred) |
 | 4h. Metrics: success rate, retry/rollback frequency, MTTR, end-to-end latency | todo | raw data already in events (`duration_ms`, retries, rollbacks) | Compute in run report (item 7) |
 | 4i. Dynamic re-planning on upstream change | done | `replan()`, stale-input discard tests | Ambiguous scenario shows it (item 6) |
 | 4j. Controlled agent autonomy | done | autonomy `full`/`supervised`/`none` per role | |
-| 5. Production-quality generated code, API/schema, tests, docs | todo | | Agents + tools + greenfield shortener (items 4-6) |
+| 5. Production-quality generated code, API/schema, tests, docs | partial | Developer/Tester/Docs agents emit validated bundles; Architect emits the API/schema | Write to disk, run tests + lint, real-model output (items 5-6) |
 | 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults | Risks/trade-offs write-up (item 8) |
-| 7. Humans own oversight, approvals, final quality | partial | fail-closed approver, supervised architect/release | Release reviewer agent, human final call (item 4) |
+| 7. Humans own oversight, approvals, final quality | done | fail-closed approver; approval on architect + release in the graph; Release agent only recommends | |
 | 8. Final engineering summary | todo | | item 8 |
 | Deliverable: runnable end-to-end prototype | todo | | `run_demo.py` (item 6), CI proof (item 9) |
 | Deliverable: architecture overview | partial | `CLAUDE.md` architecture list | README + architecture doc (item 8) |
