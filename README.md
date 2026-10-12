@@ -15,10 +15,11 @@ hash-chained audit log from which every reported metric is computed.
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-demo.txt -r requirements-dev.txt
-python run_demo.py greenfield-python --auto-approve  # recorded real-model run, replayed offline
+python run_demo.py greenfield --auto-approve         # recorded .NET run, replayed offline (needs the .NET SDK)
+python run_demo.py greenfield-python --auto-approve  # same brief on the Python stack
 python run_demo.py failures                          # 8 governance demos: retry, rollback, policy, re-plan...
 python run_demo.py new                               # your own idea -> Q&A -> approved spec -> .NET API (needs a key)
-pytest -q && pytest -q -m slow                       # 297 fast tests + 11 subprocess tests
+pytest -q && pytest -q -m slow                       # 311 fast tests + 11 subprocess tests
 ```
 
 Each run prints a live event feed and writes `runs/<scenario>/report.md`, which includes
@@ -47,9 +48,9 @@ a gate to see what you are approving). For a guided 10-minute tour, see
 
 | Command | What it shows | Model answers |
 |---|---|---|
-| `run_demo.py greenfield` | URL shortener from a written brief, built as an **ASP.NET Core** API with xUnit tests | .NET; recording pending (see [recording](docs/RECORDING.md)) |
-| `run_demo.py brownfield` | Add daily click analytics to the existing **.NET** app: C# codebase scan, grounded impact analysis with human sign-off, revision of existing code | .NET; needs the greenfield output as its baseline, then recording |
-| `run_demo.py ambiguous` | "Make links safer and give marketing better insights": blocking clarifying questions, human answers, requirements re-planned; .NET product | .NET; recording pending |
+| `run_demo.py greenfield` | URL shortener from a written brief, built as an **ASP.NET Core** API with xUnit tests | **Recorded**: 31 xUnit tests passing after 4 repair loops (3 → 3 → 27 → 30 → 31), then release |
+| `run_demo.py brownfield` | Add daily click analytics to the existing **.NET** app: C# codebase scan, grounded impact analysis with human sign-off, revision of existing code | **Recorded**: builds on the released greenfield app; one repair loop (build error), then release |
+| `run_demo.py ambiguous` | "Make links safer and give marketing better insights": blocking clarifying questions, human answers, requirements re-planned; .NET product | **Recorded, ends FAILED by design of the budget**: 6 repair loops (best 18/26) run out, nothing released; see [scenarios](docs/SCENARIOS.md) |
 | `run_demo.py greenfield-python` | The same brief on the Python stack (FastAPI): 9 requirements, 12 traced tasks, 18 files, 30 generated tests passing after 2 automatic repair loops | **Recorded** from gemini-3.8-flash; shows the stacks are pluggable |
 | `run_demo.py new` | **Your own idea**, interactively: type it (or `--request-file`), answer clarifying questions one at a time, approve the readable spec (then locked) and plan; Warden builds an ASP.NET Core API + xUnit tests, verified with `dotnet build`/`dotnet test`; nothing outside the approved plan lands without your approval | Live Gemini, recorded for replay |
 | `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change, human rollback of a shipped feature, resume mid-graph from existing artifacts | Scripted (no model needed) |
