@@ -78,6 +78,8 @@ At each gate you can:
 - **r** reject, with a reason
 - **v** view the staged spec, design or file list first
 
+At the requirements step you can also press **d** to accept all proposed defaults and go straight to the spec review (this also keeps an interactive replay on the recorded path).
+
 Approving every gate follows the recorded path. A different decision takes the run down a path that has no
 recording yet, so replay stops with a clear message (`--record` with a key explores it live).
 

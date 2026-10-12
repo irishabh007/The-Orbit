@@ -156,7 +156,9 @@ class ConsoleApprover:
             questions = _open_questions(staged["spec.json"])
             if questions and self._rounds_used.get(request.node_id, 0) < self._discovery_rounds:
                 self._rounds_used[request.node_id] = self._rounds_used.get(request.node_id, 0) + 1
-                return self._discovery(questions)
+                if self._wants_to_answer(questions):
+                    return self._discovery(questions)
+                self._rounds_used[request.node_id] = self._discovery_rounds  # defaults accepted: review now
             print(render_spec(staged["spec.json"]), file=p)
             print("\nApproving locks this spec: any later change to it needs your approval again."
                   + (" Remaining questions will use their proposed defaults." if questions else ""), file=p)
@@ -178,6 +180,18 @@ class ConsoleApprover:
         while question and not comment:
             comment = self._input(question).strip()
         return ApprovalDecision(verdict, self.name, comment)  # type: ignore[arg-type]
+
+    def _wants_to_answer(self, questions: list[dict[str, Any]]) -> bool:
+        p = self._out
+        print(f"\nThe requirements agent has {len(questions)} question(s):", file=p)
+        for q in questions:
+            print(f"  {q.get('id')} {q.get('question')}  (default: {q.get('proposed_default')})", file=p)
+        while True:
+            choice = self._input("[q] answer them one by one / [d] accept all proposed defaults and review "
+                                 "the spec: ").strip().lower()[:1]
+            if choice in ("q", "d"):
+                return choice == "q"
+            print("Please choose q or d.", file=p, flush=True)
 
     def _discovery(self, questions: list[dict[str, Any]]) -> ApprovalDecision:
         p = self._out

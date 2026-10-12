@@ -67,7 +67,7 @@ class IntakeTests(unittest.TestCase):
 
 class DiscoveryTests(unittest.TestCase):
     def test_questions_are_asked_one_at_a_time_with_defaults(self) -> None:
-        typist = Typist("90 days", "", "Only https targets please")
+        typist = Typist("q", "90 days", "", "Only https targets please")
         out = io.StringIO()
         decision = ConsoleApprover("alice", input_fn=typist, out=out).decide(spec_request(spec_with(QUESTION, OPTIONAL)))
         self.assertEqual(decision.verdict, "changes")  # answers go back to the requirements agent
@@ -76,6 +76,15 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("Additional notes: Only https targets please", decision.comment)
         self.assertIn("storage and expiry", out.getvalue())  # why it matters is shown
         self.assertIn("never expire", out.getvalue())  # the default is shown
+
+    def test_accepting_all_defaults_goes_straight_to_review(self) -> None:
+        # also what keeps an interactive replay on the recorded path (auto-approve accepted defaults)
+        out = io.StringIO()
+        typist = Typist("d", "a")
+        decision = ConsoleApprover("alice", input_fn=typist, out=out).decide(spec_request(spec_with(QUESTION)))
+        self.assertEqual((decision.verdict, decision.comment), ("approve", ""))
+        self.assertIn("never expire", out.getvalue())  # the defaults being accepted are shown
+        self.assertEqual(len(typist.prompts), 2)  # no per-question prompts
 
     def test_spec_without_questions_goes_to_review_and_approval(self) -> None:
         out = io.StringIO()
@@ -87,7 +96,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("locks", shown)  # the human is told approval locks the spec
 
     def test_discovery_rounds_are_bounded(self) -> None:
-        approver = ConsoleApprover("alice", input_fn=Typist("x", "", "x", "", "a"), out=io.StringIO(),
+        approver = ConsoleApprover("alice", input_fn=Typist("q", "x", "", "q", "x", "", "a"), out=io.StringIO(),
                                    discovery_rounds=2)
         for _ in range(2):
             self.assertEqual(approver.decide(spec_request(spec_with(QUESTION))).verdict, "changes")
@@ -175,7 +184,7 @@ class InteractiveNewProjectTests(unittest.TestCase):
         clients = {role: ScriptedClient([], default=js(answer)) for role, answer in DOTNET_ANSWERS.items()}
         clients["requirements"] = ScriptedClient([js(spec_with(QUESTION)), js(spec_with(assumptions=["90-day expiry"]))])
         # discovery answer, no extra notes, then approve spec, plan, project files (x2) and release
-        typist = Typist("90 days", "", "a", "a", "a", "a", "a")
+        typist = Typist("q", "90 days", "", "a", "a", "a", "a", "a")
         with tempfile.TemporaryDirectory() as tmp:
             result = run_scenario(new_project_scenario("Shortener", "a link shortener"), Path(tmp) / "run",
                                   clients, ConsoleApprover("alice", input_fn=typist, out=io.StringIO()),
