@@ -114,7 +114,7 @@ def run_scenario(
             commit, repo = published.commit, git.root
             log.append(run_id, EventType.NOTE, "orchestrator",
                        data={"published_commit": commit, "files": len(published.files), "repo": "repo"})
-    _print_summary(summary, run_dir, commit, out)
+    print_summary(summary, run_dir, commit, out)
     return ScenarioResult(summary, run_dir, log_path, commit, repo)
 
 
@@ -138,7 +138,7 @@ def _commit_message(store: ArtifactStore, log: EventLog, run_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _print_summary(summary: RunSummary, run_dir: Path, commit: str | None, out: TextIO) -> None:
+def print_summary(summary: RunSummary, run_dir: Path, commit: str | None, out: TextIO) -> None:
     print("\n" + "-" * 78, file=out)
     print(f"Run {summary.state.value}" + (f": {summary.reason}" if summary.reason else ""), file=out)
     for node, state in summary.nodes.items():

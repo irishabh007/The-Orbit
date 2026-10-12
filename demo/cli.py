@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from demo.console import ConsoleApprover
+from demo.failures import CASES, run_case
 from demo.runner import REQUESTS, ROOT, load_scenario, run_scenario
 from warden.approval import ApprovalDecision, Approver, ScriptedApprover
 from warden.llm import LLMClient, LLMError, RecordReplayClient, RetryingClient
@@ -19,7 +20,9 @@ RECORDINGS = ROOT / "recordings"
 def _parser() -> argparse.ArgumentParser:
     scenarios = sorted(p.stem for p in REQUESTS.glob("*.md"))
     p = argparse.ArgumentParser(prog="run_demo.py", description="Run a Warden demo scenario end to end.")
-    p.add_argument("scenario", choices=scenarios)
+    p.add_argument("scenario", choices=[*scenarios, "failures"],
+                   help="'failures' runs the failure demos (scripted model answers, no key needed)")
+    p.add_argument("--case", choices=sorted(CASES), help="with 'failures': run only this case")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true",
                       help="call Gemini for any prompt not yet recorded and save it (needs GEMINI_API_KEY)")
@@ -40,6 +43,10 @@ def _gemini() -> LLMClient:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.scenario == "failures":
+        for name in [args.case] if args.case else list(CASES):
+            run_case(name, args.out / "failures" / name)
+        return 0  # each case demonstrates a failure; reaching here means all behaved as shown
     recordings = RECORDINGS / args.scenario
     try:
         if args.live:
