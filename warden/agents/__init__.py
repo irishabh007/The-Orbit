@@ -42,7 +42,7 @@ def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: i
     return agents
 
 
-def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 2) -> Graph:
+def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 3) -> Graph:
     spec, design = "spec.json", "design.json"
     built = ("code.bundle", "tests.bundle", "docs.bundle")
     return Graph([

@@ -60,6 +60,10 @@ class StructuredAgent(Generic[M]):
         self.repair_attempts = repair_attempts
 
     # ---- hooks for roles -------------------------------------------------
+    def builtin_checks(self, model: M) -> list[str]:
+        """Checks every agent of a kind gets for free (roles add theirs in ``check``)."""
+        return []
+
     def check(self, model: M, inputs: dict[str, str]) -> list[str]:
         """Semantic checks beyond the schema; return human-readable problems."""
         return []
@@ -96,7 +100,7 @@ class StructuredAgent(Generic[M]):
             return None, [f"{'.'.join(str(p) for p in e['loc']) or '(root)'}: {e['msg']}"
                           for e in exc.errors()]
         typed: M = model  # type: ignore[assignment]  # schema is the role's M
-        problems = self.check(typed, inputs)
+        problems = self.builtin_checks(typed) + self.check(typed, inputs)
         return (None, problems) if problems else (typed, [])
 
     def previous_output(self, ctx: AgentContext) -> str:
@@ -140,6 +144,21 @@ class BundleAgent(StructuredAgent[FileBundle]):
     """Roles that emit files: the model returns a FileBundle, stored as ``*.bundle``."""
 
     schema = FileBundle
+
+    def builtin_checks(self, model: FileBundle) -> list[str]:
+        """Python files must parse. ``compile`` only parses: nothing generated is executed here.
+
+        A syntax error found here costs one repair call; found by verify it costs a whole
+        repair loop (both authors regenerate, then the tests run again).
+        """
+        problems = []
+        for f in model.files:
+            if f.path.endswith(".py"):
+                try:
+                    compile(f.content, f.path, "exec", dont_inherit=True)
+                except SyntaxError as exc:
+                    problems.append(f"{f.path}:{exc.lineno}: syntax error: {exc.msg}")
+        return problems
 
     def render(self, model: FileBundle) -> dict[str, str | bytes]:
         return {self.output: pack({f.path: f.content for f in model.files})}

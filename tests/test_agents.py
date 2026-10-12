@@ -221,6 +221,16 @@ class BundleAgentTests(AgentTestCase):
             with self.subTest(paths=[f["path"] for f in bad["files"]]), self.assertRaises(AgentOutputError):
                 DeveloperAgent(ScriptedClient([js(bad)] * 2)).run(self.ctx("spec.json", "design.json"))
 
+    def test_python_syntax_errors_are_repaired_inside_the_agent(self) -> None:
+        broken = files({"app/main.py": "X = (1,\nY = 2\n", "requirements.txt": "fastapi\n"})
+        llm = ScriptedClient([js(broken), js(CODE)])
+        DeveloperAgent(llm).run(self.ctx("spec.json", "design.json"))
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn("app/main.py:1", llm.calls[1].prompt)  # file and line fed back
+        bad_test = files({"tests/test_a.py": "def test_x(:\n    pass\n"})
+        with self.assertRaisesRegex(AgentOutputError, "syntax"):
+            TesterAgent(ScriptedClient([js(bad_test)] * 2)).run(self.ctx("spec.json", "design.json"))
+
     def test_tester_writes_only_tests(self) -> None:
         TesterAgent(ScriptedClient([js(TESTS)])).run(self.ctx("spec.json", "design.json"))
         with self.assertRaises(AgentOutputError):
