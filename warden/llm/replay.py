@@ -1,6 +1,6 @@
 """Record/replay backend: reviewers run every demo offline, with no API key.
 
-Each request is stored as ``<dir>/<request.key()>.json`` (one file per request: easy
+Each request is stored as ``<dir>/<request.key()>.json`` (``-1``, ``-2``... for repeats; easy
 to review and diff, and parallel agents never contend for one file). Modes:
 
 * ``replay``  recordings only; a miss raises ``LLMReplayMiss`` (fails closed, no network)
@@ -14,6 +14,8 @@ never credentials. Replay makes demos reproducible, not the model.
 from __future__ import annotations
 
 import json
+import threading
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
@@ -36,9 +38,21 @@ class RecordReplayClient:
         self.directory = Path(directory)
         self.inner = inner
         self.mode = mode
+        self._seen: Counter[str] = Counter()
+        self._lock = threading.Lock()
 
     def _path(self, request: LLMRequest) -> Path:
-        return self.directory / f"{request.key()}.json"
+        """The n-th identical request in this client's lifetime has its own recording.
+
+        A retry re-sends the same prompt and must get a fresh model answer (recorded as
+        ``<key>-1``, ``<key>-2``...), not a replay of the answer that just failed. Replay
+        follows the same sequence, so a recorded run reproduces exactly.
+        """
+        key = request.key()
+        with self._lock:
+            n = self._seen[key]
+            self._seen[key] += 1
+        return self.directory / (f"{key}.json" if n == 0 else f"{key}-{n}.json")
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         path = self._path(request)

@@ -108,10 +108,10 @@ class RecordReplayTests(unittest.TestCase):
 
     def test_auto_mode_records_only_on_miss(self) -> None:
         inner = ScriptedClient(["first"], default="second")
-        client = RecordReplayClient(self.dir, inner, mode="auto")
-        self.assertEqual(client.complete(LLMRequest("q")).text, "first")
-        self.assertEqual(client.complete(LLMRequest("q")).text, "first")
-        self.assertEqual(len(inner.calls), 1)
+        self.assertEqual(RecordReplayClient(self.dir, inner, mode="auto").complete(LLMRequest("q")).text, "first")
+        rerun = RecordReplayClient(self.dir, inner, mode="auto")  # a later run of the same scenario
+        self.assertEqual(rerun.complete(LLMRequest("q")).text, "first")
+        self.assertEqual(len(inner.calls), 1)  # recorded answer reused, model not called again
 
     def test_recording_is_one_readable_file_per_request(self) -> None:
         RecordReplayClient(self.dir, ScriptedClient(["a", "b"]), mode="record").complete(LLMRequest("q", system="s"))
@@ -119,6 +119,18 @@ class RecordReplayTests(unittest.TestCase):
         self.assertEqual([f.stem for f in files], [LLMRequest("q", system="s").key()])
         data = json.loads(files[0].read_text("utf-8"))
         self.assertEqual((data["request"]["prompt"], data["response"]["text"]), ("q", "a"))
+
+    def test_repeated_identical_requests_get_their_own_recordings(self) -> None:
+        # a retry sends the same prompt; it must reach the model again, not replay the failure
+        inner = ScriptedClient(["first", "second"])
+        recorder = RecordReplayClient(self.dir, inner, mode="auto")
+        self.assertEqual([recorder.complete(LLMRequest("q")).text for _ in range(2)], ["first", "second"])
+        replay = RecordReplayClient(self.dir, mode="replay")
+        self.assertEqual([replay.complete(LLMRequest("q")).text for _ in range(2)], ["first", "second"])
+        with self.assertRaises(LLMReplayMiss):  # more repeats than were recorded: fail closed
+            replay.complete(LLMRequest("q"))
+        key = LLMRequest("q").key()
+        self.assertEqual(sorted(p.stem for p in self.dir.glob("*.json")), [key, f"{key}-1"])
 
     def test_errors_are_not_recorded(self) -> None:
         inner = ScriptedClient([LLMTransientError("busy")])

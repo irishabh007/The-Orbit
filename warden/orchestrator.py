@@ -284,7 +284,7 @@ class Orchestrator:
                          agent=spec.fallback_agent if rec.used_fallback else spec.agent)
         agent = self.agents[spec.fallback_agent if rec.used_fallback and spec.fallback_agent else spec.agent]
         ctx = AgentContext(self.run_id, nid, rec.attempts, self.store, spec.consumes,
-                           self._feedback.pop(nid, None))
+                           self._feedback.get(nid))  # kept until the node succeeds (retries need it)
         pre = self.policy.check_pre(spec, ctx)
         self._log(EventType.POLICY_CHECK, nid,
                   {"phase": "pre", "allow": pre.allow, "rule": pre.rule, "reason": pre.reason},
@@ -382,6 +382,7 @@ class Orchestrator:
         seq = self._transition(nid, NodeState.SUCCEEDED, events,
                                duration_ms=duration_ms, attempts=rec.attempts)
         rec.attempts, rec.replans = 0, 0
+        self._feedback.pop(nid, None)  # addressed: the next run of this node starts clean
         if changed:
             self.replan(changed, cause=seq)
 

@@ -244,6 +244,28 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertEqual(decided.actor, "human:alice")
         self.assertEqual(len(decided.caused_by), 1)  # linked to the request
 
+    def test_feedback_survives_a_failed_attempt_until_the_node_succeeds(self) -> None:
+        # found in a real run: a retry after an agent error silently dropped the feedback
+        seen: list[str | None] = []
+
+        def design(ctx: AgentContext) -> AgentResult:
+            seen.append(ctx.feedback)
+            if ctx.feedback and len(seen) == 2:
+                raise RuntimeError("model returned junk")
+            return AgentResult({"design": f"design rev{len(seen)}"})
+
+        agents = self.default_agents()
+        agents["design"] = FunctionAgent("design", design)
+        nodes = sdlc_nodes(design=NodeSpec("design", "design", ("req",), ("spec",), ("design",),
+                                           requires_approval=True))
+        approver = ScriptedApprover({"design": [ApprovalDecision("changes", "alice", "add rate limits"),
+                                                ApprovalDecision("approve", "alice")]})
+        orch = self.build(nodes, agents, approver=approver)
+        summary = orch.run()
+        self.assertEqual(summary.state, RunState.SUCCEEDED)
+        self.assertEqual(seen, [None, "add rate limits", "add rate limits"])
+        self.assertNotIn("design", orch._feedback)  # cleared once the node succeeded
+
     def test_changes_requested_feeds_comment_back_then_approves(self) -> None:
         seen: list[str | None] = []
 
