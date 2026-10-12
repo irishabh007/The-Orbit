@@ -15,6 +15,7 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 - `warden/dag.py`         Graph + NodeSpec (gates, consumes/produces); validates at construction
 - `warden/agent.py`       Agent contract; agents RETURN staged outputs, never write the store
 - `warden/policy.py`      pre/post guardrail interface + YAML rule engine (`policies/default.yaml`)
+- `warden/llm/`          LLMClient protocol; scripted, record/replay and Gemini (httpx) backends
 - `warden/approval.py`    human approval interface; default approver REJECTS (fail closed)
 - `warden/orchestrator.py` scheduler: parallel branches + joins, retries -> fallback -> rollback,
                            approvals, safe-stop, replan, rollback, adopt (brownfield entry), resume

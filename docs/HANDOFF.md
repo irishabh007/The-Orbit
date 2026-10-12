@@ -42,18 +42,21 @@ orchestrator can start from any point (brownfield).
 
 ## 3. Status
 
-**Done and tested (100 tests):**
+**Done and tested (123 tests):**
 - `models.py` states and transition table; `eventlog.py` hash chain + lineage; `artifacts.py` versioning, staleness, restore, drop
 - `dag.py`, `agent.py`, `approval.py` (interface + scripted + reject-all)
 - `policy.py` + `policies/default.yaml`: YAML engine with secrets (deny, never echoed to the log),
   dependency allowlist (deny), protected paths (escalate to approval), autonomy per agent role
   (`full` / `supervised` / `none`); fails closed on invalid policy files
+- `llm/`: `LLMClient` protocol; `ScriptedClient` (answers or exceptions, thread-safe);
+  `RecordReplayClient` (one JSON file per request hash; replay misses fail closed, errors never
+  recorded); `GeminiClient` (httpx, key in header, scrubbed from errors and repr, transient vs
+  permanent errors, no internal retries). Only `llm/gemini.py` may import httpx (test-enforced)
 - `orchestrator.py`: parallel scheduling with joins, retry -> fallback -> rollback, approvals,
   safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
   brownfield entry, persistence/resume
 
-**Known gaps:** no
-LLM layer; no real agents; no CLI; no report/metrics; no docs beyond this.
+**Known gaps:** no real agents; no CLI; no report/metrics; no docs beyond this.
 
 ## 4. Remaining work, in priority order
 
@@ -63,7 +66,7 @@ Each item is done only when a test demonstrates it.
 2. ~~**YAML policy engine**~~ Done. (`warden/policy.py`, `policies/default.yaml`): rules for secrets in
    output, dependency allowlist, protected paths requiring approval, and max autonomy per node kind.
    Pre and post checks; denials are never retried.
-3. **LLM layer** (`warden/llm/`): `LLMClient` protocol; Gemini adapter via httpx (key from `.env`);
+3. ~~**LLM layer**~~ Done. (`warden/llm/`): `LLMClient` protocol; Gemini adapter via httpx (key from `.env`);
    record/replay backend keyed by hash of prompt; scripted backend. Never log keys.
 4. **Agents** (`warden/agents/`): Requirements (vague text -> numbered requirements, acceptance
    criteria, assumptions, clarifying questions), Architect (needs approval), Planner, Developer,
@@ -98,4 +101,7 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - Policy secret scanning is regex-based: it catches common key formats and literal credential
   assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
   `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
-- Test suite runs at about 2s, right at the CLAUDE.md budget; the orchestrator tests dominate
+- Test suite runs at about 2.1s, just over the CLAUDE.md 2s budget; the orchestrator tests dominate
+- Recordings are keyed on the request only, not the model: a recording made with one Gemini model
+  replays under another (the recording file names the model that produced it)
+- LLM calls are not yet in the event log (tokens, latency, backend); agents should report them

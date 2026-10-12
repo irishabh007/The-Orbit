@@ -1,2 +1,4 @@
 # Core is standard library only, except PyYAML for loading policy files (CLAUDE.md rule 7).
 PyYAML>=6.0
+# Adapters (only imported when used): warden/llm/gemini.py
+httpx>=0.27
