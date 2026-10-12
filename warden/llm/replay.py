@@ -69,6 +69,19 @@ class RecordReplayClient:
         self.used.add(path)
         return response
 
+    def prune(self) -> list[Path]:
+        """Delete recordings this session did not use; call after a complete, successful run.
+
+        Recording sessions leave answers from abandoned paths (fixed bugs, changed prompts).
+        Pruning after a clean replay keeps exactly the set the demo needs.
+        """
+        if not self.used:
+            raise ValueError("this session used no recordings; refusing to prune everything")
+        removed = sorted(p for p in self.directory.glob("*.json") if p not in self.used)
+        for path in removed:
+            path.unlink()
+        return removed
+
     def _write(self, path: Path, request: LLMRequest, response: LLMResponse) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         payload = {"key": request.key(), "recorded_at": utc_now(),

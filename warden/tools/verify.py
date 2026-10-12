@@ -75,9 +75,10 @@ class VerifyAgent:
             write_files(scratch, files)
             for check in self.checks:
                 res = self.runner(check.argv, scratch, self.timeout)
+                # no timings in the report: downstream agents read it, and anything that varies
+                # between runs changes their prompts and breaks replay (the event log has timings)
                 results.append({"name": check.name, "command": " ".join(check.argv[1:] or check.argv),
                                 "passed": res.ok, "returncode": res.returncode, "timed_out": res.timed_out,
-                                "duration_ms": res.duration_ms,
                                 "output_tail": normalize_output(res.output, scratch)[-_TAIL:]})
         passed = all(r["passed"] for r in results)
         report = {"passed": passed, "files": len(files), "checks": results}

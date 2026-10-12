@@ -127,6 +127,19 @@ class VerifyAgentTests(TmpCase):
         tail = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))["checks"][0]["output_tail"]
         self.assertEqual(tail, "./tests/test_main.py:3: AssertionError\n1 failed, 2 passed in <t>s\n")
 
+    def test_report_is_identical_across_runs_with_different_timings(self) -> None:
+        # found by replaying the recorded greenfield run: duration_ms in the report changed the
+        # release agent's prompt on every run, so replay could never find its recording
+        def runner_taking(ms: int) -> FakeRunner:
+            class Timed(FakeRunner):
+                def __call__(self, argv: Sequence[str], cwd: Path, timeout: float) -> CommandResult:
+                    return CommandResult(tuple(argv), 0, "1 passed in 0.12s", ms)
+            return Timed()
+
+        first = VerifyAgent(self.checks, runner=runner_taking(5)).run(self.ctx).outputs["verify_report.json"]
+        second = VerifyAgent(self.checks, runner=runner_taking(9000)).run(self.ctx).outputs["verify_report.json"]
+        self.assertEqual(first, second)
+
     def test_long_output_is_truncated_to_the_tail(self) -> None:
         runner = FakeRunner(1, output="x" * 10_000 + "THE END")
         report = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))

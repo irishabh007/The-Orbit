@@ -141,6 +141,20 @@ class RecordReplayTests(unittest.TestCase):
         replay.complete(LLMRequest("used"))
         self.assertEqual({p.name for p in replay.used}, {f"{LLMRequest('used').key()}.json"})
 
+    def test_prune_removes_recordings_the_session_did_not_use(self) -> None:
+        RecordReplayClient(self.dir, ScriptedClient(["a"]), mode="auto").complete(LLMRequest("used"))
+        RecordReplayClient(self.dir, ScriptedClient(["b"]), mode="auto").complete(LLMRequest("stale"))
+        replay = RecordReplayClient(self.dir, mode="replay")
+        replay.complete(LLMRequest("used"))
+        removed = replay.prune()
+        self.assertEqual([p.name for p in removed], [f"{LLMRequest('stale').key()}.json"])
+        self.assertEqual([p.stem for p in self.dir.glob("*.json")], [LLMRequest("used").key()])
+
+    def test_prune_refuses_when_nothing_was_used(self) -> None:
+        RecordReplayClient(self.dir, ScriptedClient(["a"]), mode="auto").complete(LLMRequest("q"))
+        with self.assertRaises(ValueError):  # a failed/empty run must not wipe the recordings
+            RecordReplayClient(self.dir, mode="replay").prune()
+
     def test_errors_are_not_recorded(self) -> None:
         inner = ScriptedClient([LLMTransientError("busy")])
         with self.assertRaises(LLMTransientError):
