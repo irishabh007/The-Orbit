@@ -118,6 +118,11 @@ Implement the design in `design.json` for the requirements in `spec.json`. Const
 - Follow the module paths and API in the design exactly: tests are written in parallel against it.
 - Do not write tests or docs; other agents own those.
 """
+    feedback_hint = """
+You own the application code and cannot change tests. Fix the code so the failing tests pass. If a test
+contradicts design.json, follow the design and explain the conflict in `notes`. Return the full set of
+files again, changing only what the failures require.
+"""
 
     def check(self, model: FileBundle, inputs: dict[str, str]) -> list[str]:
         paths = {f.path for f in model.files}
@@ -142,6 +147,11 @@ being written in parallel, so rely only on that contract. Constraints: {STACK}
 - Files under tests/ only. Name tests after requirement ids (e.g. test_r1_shorten_returns_code).
 - Use fastapi.testclient.TestClient against app.main:app and isolate state (e.g. a temporary database).
 - No network access and no sleeps.
+"""
+    feedback_hint = """
+You own the tests. Fix tests that are wrong: broken fixtures or imports, lint errors, or assertions that
+contradict spec.json / design.json. Do not weaken assertions that catch a real bug in the code: the
+developer receives the same failures and fixes the code. Return the full set of test files again.
 """
 
     def check(self, model: FileBundle, inputs: dict[str, str]) -> list[str]:

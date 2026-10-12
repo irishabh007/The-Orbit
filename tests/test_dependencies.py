@@ -5,6 +5,7 @@ core never requires them.
 """
 
 import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -35,6 +36,24 @@ def imported_modules(path: Path) -> set[str]:
 
 def top_level_imports(path: Path) -> set[str]:
     return {m.split(".")[0] for m in imported_modules(path)}
+
+
+class VerifyEnvironmentTests(unittest.TestCase):
+    def test_every_allowlisted_package_is_installed_for_verify(self) -> None:
+        # verify runs generated tests in Warden's interpreter: anything the policy lets a
+        # generated project depend on must be in the demo requirements, or tests error out
+        import yaml
+
+        root = WARDEN.parent
+        allowed = yaml.safe_load((root / "policies" / "default.yaml").read_text("utf-8"))["dependencies"]["allowed"]
+        listed: set[str] = set()
+        for name in ("requirements.txt", "requirements-dev.txt", "requirements-demo.txt"):
+            for line in (root / name).read_text("utf-8").splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line and not line.startswith("-"):
+                    listed.add(re.split(r"[<>=!~\[ ;]", line, maxsplit=1)[0].lower().replace("_", "-"))
+        missing = sorted(p for p in allowed if p.lower().replace("_", "-") not in listed)
+        self.assertEqual(missing, [])
 
 
 class DependencyRuleTests(unittest.TestCase):

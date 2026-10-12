@@ -282,13 +282,18 @@ class PipelineTests(AgentTestCase):
                             policy=YamlPolicy.from_file(DEFAULT_POLICY), approver=approver)
         return orch.run(), clients
 
-    def test_failed_verification_sends_developer_back_with_the_failure(self) -> None:
+    def test_failed_verification_sends_developer_and_tester_back(self) -> None:
         summary, clients = self.run_pipeline(ScriptedApprover(), [js(spec())], verify_codes=(1, 0))
         self.assertEqual(summary.state, RunState.SUCCEEDED, summary.reason)
-        developer_prompts = [c.prompt for c in clients["developer"].calls]
-        self.assertEqual(len(developer_prompts), 2)
-        self.assertIn("FAILED test_r1 - KeyError", developer_prompts[1])
-        self.assertEqual(len(clients["tester"].calls), 1)
+        for role, hint in (("developer", "cannot change tests"), ("tester", "Do not weaken")):
+            prompts = [c.prompt for c in clients[role].calls]
+            self.assertEqual(len(prompts), 2, role)
+            self.assertIn("FAILED test_r1 - KeyError", prompts[1])
+            self.assertIn(hint, prompts[1])  # role-specific repair guidance
+            self.assertNotIn(hint, prompts[0])  # first prompt unchanged: recordings stay valid
+            self.assertIn("Your previous", prompts[1])  # revises its own last output
+        self.assertIn("app = FastAPI()", clients["developer"].calls[1].prompt)
+        self.assertEqual(len(clients["docs"].calls), 1)
         report = self.store.latest("verify_report.json")
         assert report is not None
         self.assertTrue(json.loads(self.store.read_text(report))["passed"])

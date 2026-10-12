@@ -1,8 +1,13 @@
-# Everything needed to run the demos, including verifying the generated URL shortener:
-# the verify step runs the generated tests in this interpreter, so the packages the
-# default policy allows generated projects to use must be installed here.
+# Everything needed to run the demos, including verifying the generated URL shortener.
+# The verify step runs the generated tests in this interpreter, so EVERY package the
+# default policy allows generated projects to use must be installed here
+# (enforced by tests/test_dependencies.py).
 -r requirements.txt
 fastapi>=0.110
 uvicorn>=0.29
+pydantic-settings>=2.2
 pytest>=8.0
+pytest-cov>=5.0
+pytest-asyncio>=0.23
 ruff>=0.5
+mypy>=1.10

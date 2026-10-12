@@ -1,7 +1,7 @@
 """SDLC agents and the standard workflow graph.
 
     requirements -> architect (approval) -> developer | tester | docs
-                 developer + tester -> verify (runs tests + lint; on failure re-plans developer)
+                 developer + tester -> verify (tests + lint; failures go back to both)
                  verify + docs -> release (approval)
 
 Agents are adapters: this package may use Pydantic (CLAUDE.md rule 7). Approval on
@@ -54,9 +54,10 @@ def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 2) -> Graph:
         NodeSpec("tester", "tester", ("architect",), (spec, design), ("tests.bundle",),
                  max_retries=max_retries),
         NodeSpec("docs", "docs", ("architect",), (spec, design), ("docs.bundle",), max_retries=max_retries),
-        # failing tests are deterministic: no blind retry, send the output back to the developer
+        # failing tests are deterministic: no blind retry; send the output to both authors, each
+        # fixes the files it owns (developer: code, tester: tests)
         NodeSpec("verify", "verify", ("developer", "tester"), ("code.bundle", "tests.bundle"), (REPORT,),
-                 exit_gate=verify_gate, max_retries=0, on_failure_replan=("developer",),
+                 exit_gate=verify_gate, max_retries=0, on_failure_replan=("developer", "tester"),
                  max_replans=max_repair_loops),
         NodeSpec("release", "release", ("verify", "docs"), (spec, design, *built, REPORT),
                  ("release_review.json",), requires_approval=True, max_retries=max_retries),

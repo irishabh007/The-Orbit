@@ -25,7 +25,7 @@ from warden.tools.workspace import collect_bundles, write_files
 
 REPORT = "verify_report.json"
 _TAIL = 3000  # characters of output kept per check
-_GATE_TAIL = 1500
+_GATE_TAIL = 4000  # characters of failing output fed back to the agents
 _DURATION = re.compile(r"\bin \d+(?:\.\d+)?s\b")
 
 
@@ -49,8 +49,12 @@ class Check:
 
 
 DEFAULT_CHECKS = (
-    Check("tests", (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider")),
-    Check("lint", (sys.executable, "-m", "ruff", "check", "--no-cache", ".")),
+    # short tracebacks and no captured logs: the output is feedback for an agent, keep it signal
+    Check("tests", (sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short",
+                    "--show-capture=no")),
+    # pinned to ruff's classic correctness rules (syntax, undefined names, unused imports), so
+    # a new ruff release cannot change what "lint passes" means for generated code
+    Check("lint", (sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "E4,E7,E9,F", ".")),
 )
 
 

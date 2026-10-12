@@ -51,6 +51,9 @@ class StructuredAgent(Generic[M]):
     kind: ClassVar[str]
     role: ClassVar[str]  # system prompt
     task: ClassVar[str]  # what to produce, appended to the user prompt
+    # how to act on feedback; only added when there is feedback, so first prompts (and
+    # their recordings) do not change when this guidance is tuned
+    feedback_hint: ClassVar[str] = ""
 
     def __init__(self, llm: LLMClient, *, repair_attempts: int = 1) -> None:
         self.llm = llm
@@ -73,7 +76,7 @@ class StructuredAgent(Generic[M]):
     # ---- engine ------------------------------------------------------------
     def run(self, ctx: AgentContext) -> AgentResult:
         inputs = {name: ctx.read_text(name) for name in ctx.consumes}
-        base = self._prompt(inputs, ctx.feedback)
+        base = self._prompt(inputs, ctx.feedback, self.previous_output(ctx) if ctx.feedback else "")
         prompt = base
         errors: list[str] = []
         for _ in range(self.repair_attempts + 1):
@@ -96,13 +99,21 @@ class StructuredAgent(Generic[M]):
         problems = self.check(typed, inputs)
         return (None, problems) if problems else (typed, [])
 
-    def _prompt(self, inputs: dict[str, str], feedback: str | None) -> str:
+    def previous_output(self, ctx: AgentContext) -> str:
+        """This agent's own last committed output, shown when revising after feedback."""
+        art = ctx.store.latest(self.output)
+        return self._show(self.output, ctx.store.read_text(art)) if art is not None else ""
+
+    def _prompt(self, inputs: dict[str, str], feedback: str | None, previous: str = "") -> str:
         parts = [f"# Task\n{self.task.strip()}", "# Inputs"]
         for name, content in inputs.items():
             parts.append(f"## {name}\n{self._show(name, content)}")
+        if previous:
+            parts.append(f"# Your previous {self.output} (revise it; do not start over)\n{previous}")
         if feedback:
+            hint = f"\n\n{self.feedback_hint.strip()}" if self.feedback_hint else ""
             parts.append("# Feedback from a human reviewer or a failed verification (must be addressed)\n"
-                         + feedback.strip())
+                         + feedback.strip() + hint)
         schema = _schema_text(self.schema)
         parts.append("# Output format\nRespond with ONE JSON object that validates against this "
                      "JSON Schema. No prose and no markdown fences.\n" + schema)
