@@ -44,7 +44,7 @@ orchestrator can start from any point (brownfield).
 ## 3. Status (2026-10-12): development complete
 
 All handoff items 1-9 are implemented and test-proven: 244 fast tests and 8 slow ones, with ruff and
-mypy clean, across 34 commits. For what exists and why, see `docs/ARCHITECTURE.md` and
+mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 `docs/ENGINEERING_SUMMARY.md`, which also lists the 13 defects found by real-model runs.
 
 | Item | State |
