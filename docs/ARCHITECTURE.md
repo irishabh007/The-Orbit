@@ -40,7 +40,8 @@ graph LR
 | `approval.py` | Human gate. The default approver **rejects everything**, so with no human connected nothing that needs approval can proceed. |
 | `agents/` | Requirements, Impact, Architect (which also plans), Developer, Tester, Docs and Release. Each validates JSON output against a strict schema plus cross-artifact checks, with one repair round. |
 | `llm/` | One `LLMClient` interface, with backends for Gemini (httpx), record/replay, scripted answers and bounded backoff. Errors are classified as transient, quota or permanent. |
-| `tools/` | Verify (pytest + ruff on a scratch copy), codebase scanner (`ast`), workspace writer, command runner with a scrubbed environment, git, publish. |
+| `tools/` | Verify (stack commands on a scratch copy), codebase scanners (Python `ast`, C# patterns), workspace writer, command runner with a scrubbed environment, git, publish. |
+| `stacks.py` | Stack profiles for generated projects: prompt overrides per role, file-ownership rules, in-agent syntax check, verify commands, scanner. `dotnet-aspnetcore` (ASP.NET Core + EF Core + xUnit) and `python-fastapi`. |
 | `report.py` | Computes metrics and the Markdown report from the audit log alone. |
 
 ## Orchestration model
@@ -124,8 +125,9 @@ These failures are never retried (CLAUDE.md rule 4):
 |---|---|---|
 | Security | policy `secrets` | Hard-coded AWS key → deny. The reason names the file and line, never the value |
 | Compliance | policy `compliance` | SSN or payment card (Luhn-checked) in a test fixture → deny |
-| Supply chain | policy `dependencies` | Unlisted package, pip option or direct URL in `requirements.txt` → deny |
-| Change control | policy `protected_paths` | `requirements*.txt`, `.github/*`, `migrations/*`, `policies/*` → human approval |
+| Supply chain | policy `dependencies` | Unlisted package in `requirements.txt` or `*.csproj` (NuGet `PackageReference`), pip options, direct URLs → deny |
+| Change control | policy `protected_paths` | `requirements*.txt`, `*.csproj`, `appsettings*.json`, `Migrations/`, `.github/*`, `policies/*` → human approval |
+| Scope | policy `scope` | The developer may write only what the approved design (or brownfield impact analysis) contains, plus scaffolding; anything else stops for a human with the files named |
 | Controlled autonomy | policy `autonomy` per role | architect, impact, release: `supervised`; developer: `full`; unknown roles: `supervised` |
 | Human checkpoints | graph `requires_approval` | Architect and release always; spec for vague requests; impact for brownfield |
 | Execution safety | `tools/runner.py` | Generated code runs with an allowlisted environment (no keys) and a timeout |
@@ -144,6 +146,7 @@ These failures are never retried (CLAUDE.md rule 4):
 | LLM determinism | Record/replay keyed by request hash, with the n-th repeat recorded separately | Reviewers run offline; retries still get fresh answers | Mocking (proves less), always live (cost, flakiness) |
 | Model | gemini-3.8-flash behind one interface | Free tier for development; swappable | Any provider fits `LLMClient` |
 | Dependencies | Standard library in core; PyYAML for policy; httpx and Pydantic only in adapters | Small trusted core, enforced by a test | — |
+| Generated stack | Stack profiles; .NET (ASP.NET Core + xUnit) by default for new projects | The engine stays stack-agnostic; .NET matches the target role; Python kept so recorded runs stay valid | Hard-coding one stack; rewriting the engine in C# |
 | Generated output | A normal git repo, one commit per feature, rollback by `git revert` | Humans continue the code without Warden | Keeping output inside Warden's store |
 
 More rationale, risks and limitations: [ENGINEERING_SUMMARY.md](ENGINEERING_SUMMARY.md).

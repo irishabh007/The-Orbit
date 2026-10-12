@@ -86,7 +86,26 @@ blocking only when a wrong guess would change the API, the data model or the sec
 (`tests/test_demo.py::AmbiguousScenarioTests`): the second requirements prompt contains the
 human's answers, and the committed spec reflects them.
 
-## 4. Failure and control demos (scripted, always available)
+## 4. New project: your own idea, interactively (.NET by default)
+
+`python run_demo.py new` (or `--request-file brief.md --name "Link shortener"`). Needs a Gemini key;
+the session is recorded to `recordings/<project>/` so it can be replayed.
+
+1. **Intake:** type the idea; it can be as vague as "a link shortener for marketing".
+2. **Discovery:** each clarifying question is asked on its own, with why it matters and a proposed
+   default (Enter accepts it), plus free-form notes. The requirements agent revises the spec with
+   the answers (up to 3 drafts).
+3. **Spec approval:** a readable spec (requirements with acceptance criteria, assumptions, out of
+   scope). Approving **locks** it: a later change re-runs requirements and needs approval again.
+4. **Plan approval:** a readable design (components, endpoints, decisions, tasks traced to
+   requirements).
+5. **Build:** developer, tester and docs work in parallel on the .NET stack. Verify runs
+   `dotnet build` and `dotnet test`, and failures route back as in greenfield.
+6. **Guardrails:** project files and settings are protected paths, and NuGet packages are
+   allowlisted. The **scope** rule stops anything outside the approved plan for your decision.
+7. **Release:** your final call. Then one git commit with the audit-head anchor.
+
+## 5. Failure and control demos (scripted, always available)
 
 `python run_demo.py failures [--case NAME]`. Model answers are scripted and labelled as such.
 Everything else is real.

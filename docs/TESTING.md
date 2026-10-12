@@ -3,8 +3,8 @@
 ## How to run
 
 ```bash
-pytest -q              # 257 fast tests, deterministic, ~4s (budget: <5s)
-pytest -q -m slow      # 8 tests that run real subprocesses: pytest, ruff, git, report CLI, recorded replay
+pytest -q              # 297 fast tests, deterministic (budget: <5s on an idle machine)
+pytest -q -m slow      # 11 tests with real subprocesses: pytest, ruff, git, dotnet build/test, report CLI, recorded replay
 ruff check .           # lint
 mypy warden demo run_demo.py
 ```

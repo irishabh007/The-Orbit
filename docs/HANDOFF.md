@@ -43,9 +43,9 @@ orchestrator can start from any point (brownfield).
 
 ## 3. Status (2026-10-12): development complete
 
-All handoff items 1-9 are implemented and test-proven: 257 fast tests and 8 slow ones, with ruff and
+All handoff items 1-9 are implemented and test-proven: 297 fast tests and 11 slow ones, with ruff and
 mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
-`docs/ENGINEERING_SUMMARY.md`, which also lists the 13 defects found by real-model runs.
+`docs/ENGINEERING_SUMMARY.md`, which also lists the 15 defects found by real runs and environment probes.
 
 | Item | State |
 |---|---|
@@ -54,7 +54,9 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 | 3 LLM layer | Done: Gemini, record/replay (n-th repeat recorded separately, prune), scripted, bounded retry, quota-aware errors |
 | 4 Agents | Done: Requirements, Impact, Architect (+ plan), Developer, Tester, Docs, Release |
 | 5 Tools | Done: verify, scanner, workspace writer, scrubbed runner, git, publish |
-| 6 Demo and scenarios | Done: greenfield (**recorded**), brownfield and ambiguous (**built; not recorded**), 6 failure/control demos |
+| 6 Demo and scenarios | Done: greenfield (**recorded**, Python stack), brownfield and ambiguous (**built; not recorded**), 8 failure/control demos, `run_demo.py new` (interactive intake + discovery Q&A, .NET by default) |
+| Stacks | Done: `warden/stacks.py` profiles `dotnet-aspnetcore` (default for new projects; verified with real dotnet build/test) and `python-fastapi` |
+| Scope guard | Done: policy `scope` stops anything outside the approved plan for a human |
 | 7 Run report | Done: metrics and report from the audit log, `python -m warden.report` |
 | 8 Docs | Done: README, ARCHITECTURE, SCENARIOS, TESTING, ENGINEERING_SUMMARY, RECORDING |
 | 9 CI | Written (`.github/workflows/ci.yml`); **not yet run**: no GitHub remote configured |
@@ -62,7 +64,8 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 ## 4. Remaining work
 
 1. **Record brownfield and ambiguous** with a paid key (owner's plan), following
-   `docs/RECORDING.md`. Free tier: 20 calls per day per project.
+   `docs/RECORDING.md`. Free tier: 20 calls per day per project. Also run `run_demo.py new` once
+   on the .NET stack to get a real-model .NET showcase (it records itself).
 2. **Push to GitHub and check CI.** The recorded-replay step is informational: recordings were made
    on Windows, and tool output in repair prompts may differ on Linux or with newer packages. If it
    misses, consider `-p no:warnings` for verify's pytest and re-record (this invalidates repair-loop

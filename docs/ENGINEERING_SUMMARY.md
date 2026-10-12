@@ -39,7 +39,7 @@ Two principles shaped most decisions:
 | Recorded real-model run (greenfield) | `recordings/greenfield` (12 calls, gemini-3.8-flash) |
 | Generated URL shortener (per run) | `runs/greenfield/repo`: 18 files, ~1,800 lines, 30 passing tests |
 | Per-run evidence | `runs/<scenario>/events.jsonl`, `report.md`, `metrics.json`, `spec.json`, `design.json`, `verify_report.json`, `release_review.json` |
-| Tests | `tests/`: 257 fast + 8 slow |
+| Tests | `tests/`: 297 fast + 11 slow (including real dotnet build/test) |
 | Docs | `README.md`, `docs/` |
 
 ## Risks, trade-offs and how they are validated
@@ -93,6 +93,11 @@ Two principles shaped most decisions:
   by request, not by model.
 - **Regex-based scanning:** secret and personal-data detection catches common formats, not
   everything. Dependency checks read manifests, not imports in code.
+- **C# scanning is pattern-based:** the brownfield scanner for C# finds routes, types and
+  `using` dependencies with regular expressions (no C# parser in the standard library). Good
+  for grounding impact analysis; not a compiler.
+- **.NET scenarios need recording:** the .NET stack is verified end to end with scripted answers
+  and real `dotnet build`/`dotnet test`; real-model .NET runs need the paid-key recording session.
 - **No file deletion:** agents can add and overwrite files in the generated repo, but cannot
   delete them.
 - **Contract mismatches:** when tests and code disagree, verify sends both back. A genuinely wrong
@@ -103,8 +108,8 @@ Two principles shaped most decisions:
 
 ## Lessons from real runs
 
-Scripted tests proved the orchestration logic; the real model and real operating system found the
-rest. Each defect below was fixed with a regression test.
+Scripted tests proved the orchestration logic; the real model, the real operating system and the
+real .NET toolchain found the rest. Each defect below was fixed with a regression test.
 
 | # | Found | Fix |
 |---|---|---|
@@ -121,6 +126,8 @@ rest. Each defect below was fixed with a regression test.
 | 11 | `duration_ms` in the verify report changed the release prompt, breaking replay | No timings in artifacts that agents read |
 | 12 | Approval decisions were logged but not linked into lineage | The decision becomes the node's latest cause |
 | 13 | `gemini-2.5-flash` was retired for new accounts | Configurable model; default `gemini-3.8-flash` |
+| 14 | NuGet failed ("Value cannot be null, path1") under the scrubbed environment | Keep the system-folder variables the .NET SDK needs (paths, not secrets) |
+| 15 | `dotnet test` exits 0 when nothing was built or run | Verify checks can require evidence; .NET requires `Total: N > 0` |
 
 ## How this maps to the brief
 

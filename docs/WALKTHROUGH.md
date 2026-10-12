@@ -83,19 +83,31 @@ recording yet, so replay stops with a clear message (`--record` with a key explo
 
 *Criterion: humans own oversight, approvals and final quality.*
 
-## 5. Check the engineering (2 min)
+## 5. Build your own idea (optional, needs a key, ~10 min)
+
+```bash
+python run_demo.py new
+```
+
+Type a vague idea, answer the questions one at a time, and approve the spec and the plan. Warden
+then builds an ASP.NET Core API with xUnit tests and verifies it with `dotnet build`/`dotnet test`.
+Anything outside the plan you approved comes back to you first.
+
+*Criteria: requirement understanding; controlled autonomy; realism of outputs.*
+
+## 6. Check the engineering (2 min)
 
 ```bash
 pytest -q && pytest -q -m slow && ruff check . && mypy warden demo run_demo.py
 ```
 
-These run 257 fast tests plus 8 subprocess tests, including the recorded run replayed end to end
+These run 297 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`), including the recorded run replayed end to end
 with the real generated tests executing. Then skim:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): state machine, per-attempt control flow, bounded failure
   handling, key decisions with alternatives.
 - [ENGINEERING_SUMMARY.md](ENGINEERING_SUMMARY.md): risks with how each is validated, assumptions,
-  honest limitations, and **13 defects found only by running against the real model**, each fixed
+  honest limitations, and **15 defects found only by real runs and environment probes**, each fixed
   with a regression test.
 
 *Criteria: architecture quality; validation and risk rigor; defensible decisions; engineering

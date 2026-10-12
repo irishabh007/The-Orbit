@@ -45,3 +45,4 @@ feedback-only hints and previous outputs appear only when they apply.
 | brownfield | No: run steps 1-6 |
 | ambiguous | No: run steps 1-6 (with `--auto-approve`, the scripted product-owner answers are used) |
 | failures | Not needed (scripted) |
+| new (.NET) | Recorded automatically to `recordings/<project>/` whenever you run `run_demo.py new` with a key. To make one the showcase .NET demo, keep its brief in a file (`--request-file`) and give the same answers on replay |
