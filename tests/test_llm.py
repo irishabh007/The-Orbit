@@ -134,6 +134,17 @@ class RecordReplayTests(unittest.TestCase):
         key = LLMRequest("q").key()
         self.assertEqual(sorted(p.stem for p in self.dir.glob("*.json")), [key, f"{key}-1"])
 
+    def test_a_failed_call_does_not_use_up_a_recording_slot(self) -> None:
+        # found re-recording .NET greenfield: a 503 consumed slot 0, the retry's answer landed in
+        # slot 1, and the next run (no 503) looked for slot 0, missed, and paid for a new call
+        inner = ScriptedClient([LLMTransientError("503"), "answer"])
+        recorder = RecordReplayClient(self.dir, inner, mode="auto")
+        with self.assertRaises(LLMTransientError):
+            recorder.complete(LLMRequest("q"))
+        self.assertEqual(recorder.complete(LLMRequest("q")).text, "answer")
+        self.assertEqual([p.stem for p in self.dir.glob("*.json")], [LLMRequest("q").key()])  # slot 0
+        self.assertEqual(RecordReplayClient(self.dir, mode="replay").complete(LLMRequest("q")).text, "answer")
+
     def test_tracks_which_recordings_a_run_used(self) -> None:
         RecordReplayClient(self.dir, ScriptedClient(["a", "b"]), mode="auto").complete(LLMRequest("used"))
         RecordReplayClient(self.dir, ScriptedClient(["c"]), mode="auto").complete(LLMRequest("stale"))

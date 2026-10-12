@@ -52,21 +52,27 @@ class RecordReplayClient:
         key = request.key()
         with self._lock:
             n = self._seen[key]
-            self._seen[key] += 1
         return self.directory / (f"{key}.json" if n == 0 else f"{key}-{n}.json")
+
+    def _claim(self, request: LLMRequest, path: Path) -> None:
+        """A slot is used only by a successful answer, so the retry of a failed call (e.g. a 503)
+        lands in the same slot a later run (which may not see the 503) will look in."""
+        with self._lock:
+            self._seen[request.key()] += 1
+            self.used.add(path)
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         path = self._path(request)
         if self.mode != "record" and path.exists():
-            self.used.add(path)
+            self._claim(request, path)
             recorded = json.loads(path.read_text("utf-8"))["response"]
             return LLMResponse(recorded["text"], recorded["model"], self.name, recorded.get("input_tokens"),
                                recorded.get("output_tokens"), recorded.get("thinking_tokens"))
         if self.inner is None:
             raise LLMReplayMiss(f"no recording for request {request.key()[:12]} in {self.directory}")
-        response = self.inner.complete(request)  # errors propagate and are never recorded
+        response = self.inner.complete(request)  # errors propagate, are never recorded, claim no slot
         self._write(path, request, response)
-        self.used.add(path)
+        self._claim(request, path)
         return response
 
     def prune(self) -> list[Path]:
