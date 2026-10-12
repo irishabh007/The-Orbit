@@ -18,6 +18,8 @@ The scenarios replay recorded model answers, so no API key or model calls are ne
 **Requirements:** Python 3.11+. The .NET scenarios also need the
 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) and, on their first run, network
 access so `dotnet` can restore NuGet packages. Without .NET, start with the Python stack.
+On Windows, clone to a short path (for example `C:\src\The-Orbit`): run outputs nest deeply and can
+exceed the 260-character path limit from a very deep folder (or pass `--out C:uns`).
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
