@@ -1,0 +1,8 @@
+# Everything needed to run the demos, including verifying the generated URL shortener:
+# the verify step runs the generated tests in this interpreter, so the packages the
+# default policy allows generated projects to use must be installed here.
+-r requirements.txt
+fastapi>=0.110
+uvicorn>=0.29
+pytest>=8.0
+ruff>=0.5

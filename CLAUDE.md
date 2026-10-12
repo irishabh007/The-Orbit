@@ -5,7 +5,7 @@ reviewable software, with human approval at critical points). Agents execute und
 autonomy boundaries; humans own oversight, approvals and final quality.
 
 ## Commands
-- Test: `pytest -q`    Lint: `ruff check .`    Types: `mypy warden`
+- Test: `pytest -q`    Lint: `ruff check .`    Types: `mypy warden demo run_demo.py`
 - Slow tests (real pytest/ruff/git subprocesses): `pytest -q -m slow`
 - All four must pass before any commit. Keep the default suite fast (<2s total) and deterministic;
   anything that spawns a subprocess gets `@pytest.mark.slow`.

@@ -14,6 +14,7 @@ from warden.llm import (
     LLMResponse,
     LLMTransientError,
     RecordReplayClient,
+    RetryingClient,
     ScriptedClient,
     read_env_value,
 )
@@ -190,6 +191,33 @@ class GeminiClientTests(unittest.TestCase):
             text = "".join(p.read_text("utf-8") for p in Path(tmp).glob("*.json"))
             self.assertNotIn(FAKE_KEY, text)
             self.assertIn("hello", text)
+
+
+class RetryingClientTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.sleeps: list[float] = []
+
+    def client(self, *script: str | Exception, attempts: int = 3) -> tuple[RetryingClient, ScriptedClient]:
+        inner = ScriptedClient(list(script))
+        return RetryingClient(inner, attempts=attempts, base_delay=1.0, sleep=self.sleeps.append), inner
+
+    def test_transient_errors_back_off_then_succeed(self) -> None:
+        client, inner = self.client(LLMTransientError("503"), LLMTransientError("503"), "ok")
+        self.assertEqual(client.complete(LLMRequest("p")).text, "ok")
+        self.assertEqual(self.sleeps, [1.0, 2.0])  # exponential backoff
+        self.assertEqual(len(inner.calls), 3)
+
+    def test_gives_up_after_bounded_attempts(self) -> None:
+        client, inner = self.client(*[LLMTransientError("503")] * 5, attempts=3)
+        with self.assertRaises(LLMTransientError):
+            client.complete(LLMRequest("p"))
+        self.assertEqual(len(inner.calls), 3)
+
+    def test_permanent_errors_are_not_retried(self) -> None:
+        client, inner = self.client(LLMError("bad request"), "never")
+        with self.assertRaises(LLMError):
+            client.complete(LLMRequest("p"))
+        self.assertEqual((len(inner.calls), self.sleeps), (1, []))
 
 
 class EnvTests(unittest.TestCase):

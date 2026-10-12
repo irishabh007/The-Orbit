@@ -118,6 +118,15 @@ class VerifyAgentTests(TmpCase):
         self.assertIn("tests failed (exit 1)", gate.reason)
         self.assertIn("assert 1 == 2", gate.reason)
 
+    def test_output_is_normalized_so_replays_stay_deterministic(self) -> None:
+        # timings and the random scratch path would change every run and break replay keys
+        def runner(argv: Sequence[str], cwd: Path, timeout: float) -> CommandResult:
+            text = f"{cwd}{os.sep}tests{os.sep}test_main.py:3: AssertionError\n1 failed, 2 passed in 0.42s\n"
+            return CommandResult(tuple(argv), 1, text, 5)
+
+        tail = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))["checks"][0]["output_tail"]
+        self.assertEqual(tail, "./tests/test_main.py:3: AssertionError\n1 failed, 2 passed in <t>s\n")
+
     def test_long_output_is_truncated_to_the_tail(self) -> None:
         runner = FakeRunner(1, output="x" * 10_000 + "THE END")
         report = self.report(VerifyAgent(self.checks[:1], runner=runner).run(self.ctx))

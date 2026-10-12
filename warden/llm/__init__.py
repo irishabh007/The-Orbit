@@ -2,6 +2,7 @@
 
 * ``ScriptedClient``      fixed answers/exceptions (tests, failure demos)
 * ``RecordReplayClient``  offline replay of recorded calls (reviewers need no key)
+* ``RetryingClient``      bounded backoff around any client, transient errors only
 * ``GeminiClient``        real model; import ``warden.llm.gemini`` explicitly, since it
                           is the one module that needs httpx
 """
@@ -16,6 +17,7 @@ from warden.llm.base import (
 )
 from warden.llm.env import read_env_value
 from warden.llm.replay import RecordReplayClient
+from warden.llm.retry import RetryingClient
 from warden.llm.scripted import ScriptedClient
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "LLMResponse",
     "LLMTransientError",
     "RecordReplayClient",
+    "RetryingClient",
     "ScriptedClient",
     "read_env_value",
 ]

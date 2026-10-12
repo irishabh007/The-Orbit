@@ -64,6 +64,7 @@ def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 2) -> Graph:
 
 
 __all__ = [
+    "ROLE_CLASSES",
     "STACK",
     "AgentOutputError",
     "ArchitectAgent",

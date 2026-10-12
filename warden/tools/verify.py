@@ -9,6 +9,8 @@ the failing output, which the orchestrator routes back to the developer.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -24,6 +26,20 @@ from warden.tools.workspace import collect_bundles, write_files
 REPORT = "verify_report.json"
 _TAIL = 3000  # characters of output kept per check
 _GATE_TAIL = 1500
+_DURATION = re.compile(r"\bin \d+(?:\.\d+)?s\b")
+
+
+def normalize_output(text: str, scratch: Path) -> str:
+    """Remove run-specific noise (scratch path, timings) from check output.
+
+    The output is fed back to the developer in repair prompts; anything that changes
+    from run to run would change the prompt and make replay miss its recording.
+    """
+    for root in sorted({str(scratch), str(scratch.resolve())}, key=len, reverse=True):
+        text = text.replace(root + os.sep, "./").replace(root, ".")
+    if os.sep == "\\":
+        text = text.replace("\\", "/")
+    return _DURATION.sub("in <t>s", text)
 
 
 @dataclass(frozen=True)
@@ -57,7 +73,8 @@ class VerifyAgent:
                 res = self.runner(check.argv, scratch, self.timeout)
                 results.append({"name": check.name, "command": " ".join(check.argv[1:] or check.argv),
                                 "passed": res.ok, "returncode": res.returncode, "timed_out": res.timed_out,
-                                "duration_ms": res.duration_ms, "output_tail": res.output[-_TAIL:]})
+                                "duration_ms": res.duration_ms,
+                                "output_tail": normalize_output(res.output, scratch)[-_TAIL:]})
         passed = all(r["passed"] for r in results)
         report = {"passed": passed, "files": len(files), "checks": results}
         ok = sum(r["passed"] for r in results)

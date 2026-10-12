@@ -5,3 +5,4 @@ workspace/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+runs/
