@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -229,6 +230,67 @@ class NugetDependencyTests(unittest.TestCase):
         self.assertFalse(self.check("<Project><oops").allow)
 
 
+DESIGN = json.dumps({"components": [
+    {"name": "api", "responsibility": "HTTP", "module": "app/main.py"},
+    {"name": "store", "responsibility": "DB", "module": "app/storage/"}]})
+IMPACT = json.dumps({"affected": [{"target": "app/analytics.py", "kind": "module", "change": "add", "reason": "new"}]})
+
+
+class ScopeRuleTests(unittest.TestCase):
+    """Nothing outside the approved plan lands without a human saying yes."""
+
+    def setUp(self) -> None:
+        self.policy = YamlPolicy.from_dict(rules(scope={
+            "roles": ["developer"], "plans": ["design.json", "impact.json"],
+            "always_allowed": ["requirements.txt", "*__init__.py", "*.csproj"]}))
+
+    def post(self, files: dict[str, str], inputs: dict[str, str] | None = None, agent: str = "developer") -> Any:
+        return self.policy.check_post(node(agent, ("code.bundle",)), AgentResult({"code.bundle": pack(files)}),
+                                      inputs={"design.json": DESIGN} if inputs is None else inputs)
+
+    def test_files_in_the_approved_design_pass(self) -> None:
+        decision = self.post({"app/main.py": "x", "app/storage/db.py": "y", "requirements.txt": "fastapi\n",
+                              "app/__init__.py": ""})
+        self.assertEqual((decision.allow, decision.requires_approval), (True, False))
+
+    def test_unplanned_file_is_stopped_for_approval_with_the_reason(self) -> None:
+        decision = self.post({"app/main.py": "x", "app/payments.py": "charge()"})
+        self.assertTrue(decision.allow)
+        self.assertTrue(decision.requires_approval)
+        self.assertIn("scope", decision.rule)
+        self.assertIn("app/payments.py", decision.reason)
+        self.assertIn("not in the approved plan", decision.reason)
+
+    def test_brownfield_impact_targets_are_in_scope(self) -> None:
+        decision = self.post({"app/analytics.py": "x"}, inputs={"design.json": DESIGN, "impact.json": IMPACT})
+        self.assertFalse(decision.requires_approval)
+
+    def test_other_roles_and_nodes_without_a_plan_are_not_scoped(self) -> None:
+        self.assertFalse(self.post({"tests/test_x.py": "x"}, agent="tester").requires_approval)
+        self.assertFalse(self.post({"anything.py": "x"}, inputs={}).requires_approval)
+
+    def test_deny_mode_rejects_instead(self) -> None:
+        strict = YamlPolicy.from_dict(rules(scope={"roles": ["developer"], "plans": ["design.json"], "mode": "deny"}))
+        decision = strict.check_post(node("developer", ("code.bundle",)),
+                                     AgentResult({"code.bundle": pack({"app/payments.py": "x"})}),
+                                     inputs={"design.json": DESIGN})
+        self.assertFalse(decision.allow)
+
+    def test_orchestrator_supplies_the_approved_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ArtifactStore(Path(tmp) / "a")
+            store.put("design.json", DESIGN)
+            graph = Graph([NodeSpec("dev", "developer", (), ("design.json",), ("code.bundle",))])
+            agent = FunctionAgent("developer", lambda c: AgentResult(
+                {"code.bundle": pack({"app/main.py": "x", "app/payments.py": "y"})}))
+            approver = ScriptedApprover()
+            with EventLog(Path(tmp) / "e.jsonl") as log:
+                Orchestrator(graph, {"developer": agent}, store, log, "r", policy=self.policy,
+                             approver=approver).run()
+        self.assertEqual(len(approver.requests), 1)
+        self.assertIn("app/payments.py", approver.requests[0].reason)
+
+
 class BundleExpansionTests(unittest.TestCase):
     """Bundles (many files in one artifact) are checked file by file."""
 
@@ -312,6 +374,15 @@ class DefaultPolicyTests(unittest.TestCase):
     def test_catches_personal_data_in_test_fixtures(self) -> None:
         self.assertFalse(self.post("tester", {"tests/data.py": f"SSN = '{FAKE_SSN}'\n"}).allow)
         self.assertFalse(self.post("tester", {"tests/data.py": f"CARD = '{VALID_CARD}'\n"}).allow)
+
+    def test_default_policy_scopes_the_developer_to_the_approved_design(self) -> None:
+        design = json.dumps({"components": [{"name": "api", "responsibility": "x", "module": "app/main.py"}]})
+        decision = self.policy.check_post(
+            node("developer", ("code.bundle",)),
+            AgentResult({"code.bundle": pack({"app/main.py": "x", "app/backdoor.py": "y"})}),
+            inputs={"design.json": design})
+        self.assertTrue(decision.requires_approval)
+        self.assertIn("app/backdoor.py", decision.reason)
 
     def test_dotnet_project_and_settings_files_need_approval(self) -> None:
         for path in ("src/App/App.csproj", "src/App/appsettings.json", "src/App/Migrations/0001_Init.cs"):

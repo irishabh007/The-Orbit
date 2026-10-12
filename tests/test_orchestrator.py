@@ -25,7 +25,7 @@ class DenyPolicy(AllowAllPolicy):
             return PolicyDecision(False, rule="no-go", reason="blocked before run")
         return PolicyDecision()
 
-    def check_post(self, node, result):  # type: ignore[no-untyped-def]
+    def check_post(self, node, result, inputs=None):  # type: ignore[no-untyped-def]
         if node.id in self.post:
             return PolicyDecision(False, rule="no-secrets", reason="secret found in output")
         return PolicyDecision(requires_approval=node.id in self.escalate, reason="high impact")

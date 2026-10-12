@@ -85,6 +85,25 @@ protected_paths:
   - '*appsettings*.json'
   - '*Migrations/*'
 
+# Change control: the developer may only write what the approved plan contains (design
+# components, brownfield impact targets) plus standard scaffolding. Anything else stops
+# for a human decision, with the files named. mode: escalate | deny
+scope:
+  mode: escalate
+  roles: [developer]
+  plans: [design.json, impact.json]
+  always_allowed:
+    - 'requirements.txt'
+    - '*__init__.py'
+    - '*.csproj'
+    - '*.sln'
+    - '*.slnx'
+    - 'Directory.*.props'
+    - '*Program.cs'
+    - '*GlobalUsings.cs'
+    - '*appsettings*.json'
+    - '*Properties/launchSettings.json'
+
 # Controlled autonomy per agent role (NodeSpec.agent): full | supervised | none.
 # A fallback agent runs under its node's role. Unknown roles get the default.
 autonomy:

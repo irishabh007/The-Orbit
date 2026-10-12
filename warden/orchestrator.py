@@ -342,7 +342,9 @@ class Orchestrator:
             self._log(EventType.REPLAN, nid, {"discarded": "inputs changed during execution"}, self._own(nid))
             self._fail(nid, "inputs changed during execution", requeue_only=True)
             return
-        post = self.policy.check_post(spec, result)
+        # the approved inputs this result was built from (unchanged: checked just above)
+        inputs = {c: self.store.read_text(a) for c in spec.consumes if (a := self.store.latest(c)) is not None}
+        post = self.policy.check_post(spec, result, inputs=inputs)
         self._log(EventType.POLICY_CHECK, nid,
                   {"phase": "post", "allow": post.allow, "rule": post.rule, "reason": post.reason,
                    "requires_approval": post.requires_approval}, self._own(nid))

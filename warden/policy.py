@@ -13,6 +13,9 @@ retrying a policy violation just burns budget.
                        list a package outside its allowlist (pip / NuGet), use pip options,
                        direct URLs, or cannot be parsed.
 * ``protected_paths``  post: escalate to human approval when an output path matches.
+* ``scope``            post: files a role writes must be in the approved plan it consumed
+                       (design components; brownfield impact targets) or on a scaffolding
+                       list; anything else escalates to a human (or is denied in deny mode).
 * ``autonomy``         per agent role: ``full`` (auto-commit), ``supervised`` (commit needs
                        human approval) or ``none`` (denied before running).
 
@@ -27,9 +30,10 @@ findings are reported together.
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -53,14 +57,18 @@ class PolicyDecision:
 class Policy(Protocol):
     def check_pre(self, node: NodeSpec, ctx: AgentContext) -> PolicyDecision: ...
 
-    def check_post(self, node: NodeSpec, result: AgentResult) -> PolicyDecision: ...
+    # ``inputs``: committed content of the node's consumed artifacts (e.g. the approved design),
+    # so a policy can judge outputs against what was approved upstream
+    def check_post(self, node: NodeSpec, result: AgentResult,
+                   inputs: Mapping[str, str] | None = None) -> PolicyDecision: ...
 
 
 class AllowAllPolicy:
     def check_pre(self, node: NodeSpec, ctx: AgentContext) -> PolicyDecision:
         return PolicyDecision()
 
-    def check_post(self, node: NodeSpec, result: AgentResult) -> PolicyDecision:
+    def check_post(self, node: NodeSpec, result: AgentResult,
+                   inputs: Mapping[str, str] | None = None) -> PolicyDecision:
         return PolicyDecision()
 
 
@@ -70,7 +78,7 @@ class PolicyError(ValueError):
 
 
 AUTONOMY_LEVELS = ("full", "supervised", "none")
-_TOP_KEYS = {"version", "secrets", "compliance", "dependencies", "protected_paths", "autonomy"}
+_TOP_KEYS = {"version", "secrets", "compliance", "dependencies", "protected_paths", "autonomy", "scope"}
 _REQ_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _COMMENT = re.compile(r"(^|\s)#.*")
 
@@ -120,6 +128,42 @@ def _patterns(entries: Any, where: str, *, allow_luhn: bool = False) -> dict[str
     return out
 
 
+@dataclass(frozen=True)
+class ScopeRule:
+    roles: frozenset[str]
+    plans: tuple[str, ...]  # approved input artifacts that define what may be written
+    always_allowed: tuple[str, ...]  # scaffolding globs (manifests, project files, __init__.py)
+    mode: str  # "escalate" (human decides) or "deny"
+
+
+def _scope_rule(raw: dict[str, Any]) -> ScopeRule | None:
+    if not raw:
+        return None
+    mode = raw.get("mode", "escalate")
+    if mode not in ("escalate", "deny"):
+        raise PolicyError(f"scope.mode: expected 'escalate' or 'deny', got {mode!r}")
+    return ScopeRule(frozenset(_str_list(raw.get("roles", []), "scope.roles")),
+                     tuple(_str_list(raw.get("plans", []), "scope.plans")),
+                     tuple(_normalize_path(g) for g in _str_list(raw.get("always_allowed", []), "scope.always_allowed")),
+                     mode)
+
+
+def _planned_paths(plan_json: str) -> set[str]:
+    """File paths an approved plan allows: design component modules, impact targets."""
+    try:
+        plan = json.loads(plan_json)
+    except ValueError:
+        return set()
+    entries = [c.get("module", "") for c in plan.get("components", []) if isinstance(c, dict)]
+    entries += [a.get("target", "") for a in plan.get("affected", []) if isinstance(a, dict)]
+    return {_normalize_path(str(e).strip()) for e in entries if e and " " not in str(e).strip()}
+
+
+def _in_plan(path: str, planned: set[str]) -> bool:
+    return any(path == p or (p.endswith("/") and path.startswith(p)) or ("*" in p and fnmatch.fnmatchcase(path, p))
+               for p in planned)
+
+
 def _luhn_ok(candidate: str) -> bool:
     """Payment-card checksum: cuts false positives from arbitrary long digit strings."""
     digits = [int(c) for c in candidate if c.isdigit()]
@@ -158,7 +202,9 @@ class YamlPolicy:
         autonomy_roles: dict[str, str],
         pii_patterns: dict[str, tuple[re.Pattern[str], bool]] | None = None,  # name -> (regex, luhn)
         nuget_packages: set[str] | None = None,  # allowlist for *.csproj PackageReference (normalized)
+        scope: ScopeRule | None = None,
     ) -> None:
+        self.scope = scope
         self.secret_patterns = secret_patterns
         self.pii_patterns = pii_patterns or {}
         self.nuget_packages = nuget_packages or set()
@@ -198,6 +244,7 @@ class YamlPolicy:
         nuget = {_normalize_pkg(p) for p in _str_list(deps.get("nuget_allowed", []), "dependencies.nuget_allowed")}
         protected = [_normalize_path(p) for p in _str_list(raw.get("protected_paths", []), "protected_paths")]
 
+        scope = _scope_rule(_section(raw, "scope", {"roles", "plans", "always_allowed", "mode"}))
         autonomy = _section(raw, "autonomy", {"default", "roles"})
         default = autonomy.get("default", "supervised")  # fail closed if unspecified
         roles = autonomy.get("roles", {})
@@ -208,7 +255,7 @@ class YamlPolicy:
                 raise PolicyError(f"{where}: unknown autonomy level {level!r}, expected one of {AUTONOMY_LEVELS}")
 
         return cls(patterns, manifests, allowed, protected, default, {str(k): v for k, v in roles.items()},
-                   pii_patterns=pii, nuget_packages=nuget)
+                   pii_patterns=pii, nuget_packages=nuget, scope=scope)
 
     # ---- checks --------------------------------------------------------
     def autonomy(self, role: str) -> str:
@@ -221,13 +268,15 @@ class YamlPolicy:
                                   reason=f"role {node.agent!r} has autonomy 'none': agents may not run it")
         return PolicyDecision()
 
-    def check_post(self, node: NodeSpec, result: AgentResult) -> PolicyDecision:
+    def check_post(self, node: NodeSpec, result: AgentResult,
+                   inputs: Mapping[str, str] | None = None) -> PolicyDecision:
         files, findings = self._expand(result)
         findings += [
             *self._secrets(files, result.summary),
             *self._compliance(files, result.summary),
             *self._dependencies(files),
             *self._protected(files),
+            *self._out_of_scope(node, files, inputs or {}),
         ]
         level = self.autonomy(node.agent)
         if level != "full":
@@ -335,6 +384,23 @@ class YamlPolicy:
         if _normalize_pkg(match.group()) not in self.allowed_packages:
             return f"package not in allowlist: {match.group()}"
         return None
+
+    def _out_of_scope(self, node: NodeSpec, files: list[_File], inputs: Mapping[str, str]) -> Iterable[_Finding]:
+        """Generated files must be in the approved plan (design components, brownfield impact)."""
+        rule = self.scope
+        if rule is None or node.agent not in rule.roles:
+            return
+        plans = [name for name in rule.plans if name in inputs]
+        if not plans:
+            return  # nothing approved to compare against (e.g. a node without a design input)
+        planned = {p for name in plans for p in _planned_paths(inputs[name])}
+        outside = sorted(f.path for f in files if ":" in f.label
+                         and not _in_plan(f.path, planned) and not any(fnmatch.fnmatchcase(f.path, g)
+                                                                         for g in rule.always_allowed))
+        if outside:
+            shown = ", ".join(outside[:8]) + (f" (+{len(outside) - 8} more)" if len(outside) > 8 else "")
+            yield _Finding("scope", f"out of scope: {shown} not in the approved plan ({', '.join(plans)})",
+                           deny=rule.mode == "deny")
 
     def _protected(self, files: list[_File]) -> Iterable[_Finding]:
         for f in files:
