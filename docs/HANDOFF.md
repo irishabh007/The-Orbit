@@ -59,19 +59,14 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 | Scope guard | Done: policy `scope` stops anything outside the approved plan for a human |
 | 7 Run report | Done: metrics and report from the audit log, `python -m warden.report` |
 | 8 Docs | Done: README, ARCHITECTURE, SCENARIOS, TESTING, ENGINEERING_SUMMARY, RECORDING |
-| 9 CI | Written (`.github/workflows/ci.yml`); **not yet run**: no GitHub remote configured |
+| 9 CI | Done: runs on every push to GitHub (lint, types, tests, scripted failure demos); passing |
 
 ## 4. Remaining work
 
-1. **Record brownfield and ambiguous** with a paid key (owner's plan), following
-   `docs/RECORDING.md`. Free tier: 20 calls per day per project. Also run `run_demo.py new` once
-   on the .NET stack to get a real-model .NET showcase (it records itself).
-2. **Push to GitHub and check CI.** The recorded-replay step is informational: recordings were made
-   on Windows, and tool output in repair prompts may differ on Linux or with newer packages. If it
-   misses, consider `-p no:warnings` for verify's pytest and re-record (this invalidates repair-loop
-   recordings).
-3. Optional improvements: container sandbox for verify; deleting files
-   in the generated repo.
+1. Run `run_demo.py new` once interactively on the .NET stack for a real-model showcase of the
+   discovery Q&A (it records itself).
+2. Optional improvements: container sandbox for verify; deleting files in the generated repo;
+   a test-isolation hint for generated .NET tests (the ambiguous run's tests raced on SQLite).
 
 Constraint for whoever continues: **changing any agent prompt, schema, input or verify output
 format invalidates recordings** for the affected calls. Re-record afterwards.
@@ -84,9 +79,9 @@ See `docs/ENGINEERING_SUMMARY.md#limitations-stated-honestly`.
 
 | Brief requirement | Status | Evidence |
 |---|---|---|
-| 1 Requirement understanding | Done | Requirements agent; real run: 9 requirements, 4 questions; ambiguous scenario (scripted answers) |
+| 1 Requirement understanding | Done | Requirements agent; recorded .NET runs; ambiguous scenario asks blocking questions and folds the answers in; `run_demo.py new` discovery Q&A |
 | 2 Task decomposition | Done | Architect tasks with owners, dependencies, traceability; real run: 12 tasks |
-| 3 Brownfield codebase reasoning | Done (recording pending) | Scanner + grounded impact agent; `BrownfieldScenarioTests` |
+| 3 Brownfield codebase reasoning | Done | C# scanner + grounded impact agent; recorded .NET brownfield run ([evidence](evidence/brownfield/)) |
 | 4 DAG, gates, parallel + joins | Done | `dag.py`, orchestrator tests |
 | 4 Lineage | Done | `caused_by` + content hashes; report traces the release to every human decision |
 | 4 Human approval checkpoints | Done | Graph, policy and agent escalation; fail-closed approver |
@@ -94,8 +89,8 @@ See `docs/ENGINEERING_SUMMARY.md#limitations-stated-honestly`.
 | 4 Policy: security, compliance, change control | Done | `policies/default.yaml`, `test_policy.py` |
 | 4 Observability and metrics | Done | `report.py`: success rate, retry/rollback frequency, MTTR, latency |
 | 4 Dynamic re-planning | Done | `replan()`, repair loops, `replan-on-change` demo |
-| 5 Engineering output | Done | Generated repo: 18 files, 30 passing tests, README and docs |
+| 5 Engineering output | Done | Generated ASP.NET Core repo: 31/31 xUnit tests, README and docs ([evidence](evidence/greenfield/repo/)) |
 | 6 Validation and risk control | Done | Verify gate, policy, risk table in the engineering summary |
 | 7 Controlled autonomy | Done | Autonomy per role; release decided by a human |
 | 8 Engineering summary | Done | `docs/ENGINEERING_SUMMARY.md` |
-| Deliverables: prototype, architecture, 3 scenarios, setup, testing, limitations | Done | `README.md`, `docs/` (2 of 3 scenarios still to record) |
+| Deliverables: prototype, architecture, 3 scenarios, setup, testing, limitations | Done | `README.md`, `docs/`; all 3 scenarios recorded on .NET (ambiguous ends in a bounded, safe failure) |
