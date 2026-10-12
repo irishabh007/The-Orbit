@@ -340,8 +340,11 @@ class Orchestrator:
         if not post.allow:
             self._fail(nid, f"policy {post.rule or 'denied'}: {post.reason}", retryable=False)
             return
-        if spec.requires_approval or post.requires_approval:
-            why = "node requires approval" if spec.requires_approval else f"policy: {post.reason}"
+        reasons = [r for r in ("node requires approval" if spec.requires_approval else "",
+                               f"policy: {post.reason}" if post.requires_approval else "",
+                               f"agent asks for human input: {result.escalate}" if result.escalate else "") if r]
+        if reasons:
+            why = "; ".join(reasons)
             req = self._log(EventType.APPROVAL_REQUESTED, nid,
                             {"artifacts": sorted(result.outputs), "summary": result.summary, "reason": why},
                             self._own(nid))

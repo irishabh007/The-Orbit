@@ -19,6 +19,9 @@ class AgentResult:
     outputs: dict[str, str | bytes]  # artifact name -> content
     kind: str = "text"  # requirements | design | code | test | doc | ...
     summary: str = ""  # shown to humans in approval requests
+    # Non-empty = the agent asks for a human (e.g. blocking questions). Agents can only
+    # ask for MORE oversight: an empty value never skips a required approval.
+    escalate: str = ""
 
 
 @dataclass

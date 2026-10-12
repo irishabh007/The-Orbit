@@ -268,6 +268,18 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertIsNone(self.store.latest("release_report"))
 
 
+    def test_agent_can_ask_for_human_input(self) -> None:
+        agents = self.default_agents()
+        agents["req"] = FunctionAgent("req", lambda ctx: AgentResult(
+            {"spec": "draft"}, escalate="2 blocking questions"))
+        approver = ScriptedApprover({"req": [ApprovalDecision("reject", "alice", "answer first")]})
+        summary = self.build(agents=agents, approver=approver).run()
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertEqual(len(approver.requests), 1)
+        self.assertIn("2 blocking questions", approver.requests[0].reason)
+        self.assertIsNone(self.store.latest("spec"))
+
+
 class ReplanRollbackAndSafetyTests(OrchestratorTestCase):
     def test_replan_reruns_only_affected_nodes(self) -> None:
         orch = self.build()
