@@ -74,7 +74,29 @@ orchestrator can start from any point (brownfield).
   safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
   brownfield entry, persistence/resume
 
-**Known gaps:** agents never run against a real model yet (no recordings); no CLI / `run_demo.py`; no report/metrics; no docs beyond this.
+- `demo/` + `run_demo.py` (item 6, in progress): greenfield scenario; replay (default, offline) /
+  `--record` / `--live`; interactive or `--auto-approve`; successful runs publish one git commit
+  to `runs/<scenario>/repo`. `RetryingClient` (bounded backoff, transient only), quota-aware
+  Gemini errors, `PermanentAgentError` (no pointless retries), `fsutil.atomic_write`
+
+**Real-model status (gemini-3.8-flash):** greenfield recorded through a passing verify: 9
+requirements -> 18 files / ~1800 lines, generated tests 3 failing -> 1 -> all passing via the repair
+loop. Only the release review call is missing (free-tier daily quota of 20 requests hit).
+
+**Known gaps:** greenfield recording incomplete (1 call); brownfield, ambiguous and failure demos
+not built; no report/metrics; no docs beyond this.
+
+**Lessons from the first real runs** (each fixed with a test; good material for the summary):
+1. Windows `os.replace` fails while antivirus/indexer holds the file -> bounded retry
+2. Verify env lacked a policy-allowed package -> requirements-demo.txt must cover the allowlist
+3. Test failures routed only to the developer, who cannot edit tests -> route to both authors
+4. Repairs regenerated from scratch -> agents revise their own previous output
+5. Unpinned ruff defaults moved the goalposts -> lint pinned to E4,E7,E9,F
+6. A syntax error cost a whole repair loop -> `compile()` check inside the agent
+7. Feedback was consumed at launch, lost on retry -> kept until the node succeeds
+8. Retries replayed the same failed recording -> n-th identical request has its own recording
+9. Read-only git objects broke cleanup, and the run marker was deleted first -> fixed both
+10. Daily quota 429 treated as transient -> quota errors are permanent, not retried
 
 ## 4. Remaining work, in priority order
 
@@ -142,7 +164,7 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 
 | Brief requirement | Status | Where / evidence | Next |
 |---|---|---|---|
-| 1. Requirement understanding (intent, ambiguity, normalized problem) | partial | `RequirementsAgent`: numbered requirements, acceptance criteria, assumptions, blocking questions escalate; `test_agents.py` | Real-model recordings; ambiguous scenario (item 6) |
+| 1. Requirement understanding (intent, ambiguity, normalized problem) | partial | `RequirementsAgent`; real run: 9 requirements with acceptance criteria and a blocking question from the greenfield brief | Ambiguous scenario (item 6) |
 | 2. Task decomposition (tasks, dependencies, sequencing) | done | `dag.py`; `ArchitectAgent` tasks with owners, `depends_on`, requirement traceability, cycle + coverage checks | Shown in run report (item 7) |
 | 3. Brownfield codebase reasoning (impacted modules/APIs/data flows) | partial | `Orchestrator.adopt()` mid-graph entry | AST scanner + impact analysis (items 5, 6) |
 | 4a. Explicit DAG with entry/exit gates | done | `dag.py`; `test_dag.py`, gate tests in `test_orchestrator.py` | |
@@ -150,7 +172,7 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 | 4c. Cross-stage context and decision lineage | done | artifact input hashes, `caused_by` lineage tests | |
 | 4d. Human approval for high-impact actions | done | `approval.py`; node, policy and agent escalation tests | Interactive CLI approver (item 6) |
 | 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests`; feature rollback = `git revert` (`test_tools.py`, slow) | Failure demo (item 6) |
-| 4e+. Non-linear recovery (failure routed back upstream) | done | `RepairLoopTests`; pipeline test: failed verify re-runs developer with the test output | Shown in greenfield demo (item 6) |
+| 4e+. Non-linear recovery (failure routed back upstream) | done | `RepairLoopTests`; real run: generated tests 3 failing -> 1 -> 0 over repair loops | Shown in the run report (item 7) |
 | 4f. Policy guardrails: security | done | secrets + dependency allowlist, `test_policy.py` | Secret scanner tool on files (item 5) |
 | 4f. Policy guardrails: change control | done | protected paths + autonomy levels, `test_policy.py` | |
 | 4f. Policy guardrails: compliance | **gap** | only indirect (tamper-evident audit log, recorded approvals) | Decide an explicit compliance rule (e.g. PII in code/fixtures, license allowlist, required release sign-off) |
@@ -158,11 +180,11 @@ to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the b
 | 4h. Metrics: success rate, retry/rollback frequency, MTTR, end-to-end latency | todo | raw data already in events (`duration_ms`, retries, rollbacks) | Compute in run report (item 7) |
 | 4i. Dynamic re-planning on upstream change | done | `replan()`, stale-input discard tests | Ambiguous scenario shows it (item 6) |
 | 4j. Controlled agent autonomy | done | autonomy `full`/`supervised`/`none` per role | |
-| 5. Production-quality generated code, API/schema, tests, docs | partial | agents emit validated bundles; verify runs the generated tests + ruff; publish commits a normal git repo | Real-model output (item 6) |
+| 5. Production-quality generated code, API/schema, tests, docs | partial | real run: FastAPI app (config, db, service, SSRF guard, rate limiter, JSON logging), 30 passing tests, README + docs | Finish recording; human review of output quality |
 | 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults, verify gate, scrubbed env for generated code | Risks/trade-offs write-up (item 8) |
 | 7. Humans own oversight, approvals, final quality | done | fail-closed approver; approval on architect + release in the graph; Release agent only recommends | |
 | 8. Final engineering summary | todo | | item 8 |
-| Deliverable: runnable end-to-end prototype | todo | | `run_demo.py` (item 6), CI proof (item 9) |
+| Deliverable: runnable end-to-end prototype | partial | `run_demo.py greenfield` ran end to end live (published a commit) | Complete recordings so it replays offline; CI proof (item 9) |
 | Deliverable: architecture overview | partial | `CLAUDE.md` architecture list | README + architecture doc (item 8) |
 | Deliverable: three scenarios with decomposition, orchestration, validation | todo | | item 6 |
 | Deliverable: setup instructions | todo | `.env.example` | README quick start (item 8) |
