@@ -114,7 +114,41 @@ def _safe_stop(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactStore, P
     return _execute(run_dir, out, _clients(), config=Config(step_budget=4))
 
 
+def _replan_on_change(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactStore, Path]:
+    """Finish a run, then the human changes the request: only what actually changes is redone."""
+    revised = {**ANSWERS["requirements"], "requirements": [
+        *ANSWERS["requirements"]["requirements"],
+        {"id": "R3", "text": "Reject targets on a malware domain denylist", "category": "security",
+         "priority": "should", "acceptance_criteria": ["denylisted domain -> 422"]}]}
+    clients = _clients(requirements=ScriptedClient([js(ANSWERS["requirements"]), js(revised)]))
+    agents = build_agents(clients, verifier=_scripted_verifier())
+    store = ArtifactStore(run_dir / "artifacts")
+    store.put("request", "Build a URL shortener (scripted demo).", produced_by="human:requester")
+    log_path, state = run_dir / "events.jsonl", run_dir / "state.json"
+
+    def orchestrator(log: ConsoleEventLog, run_id: str) -> Orchestrator:
+        return Orchestrator(sdlc_graph(), agents, store, log, run_id, policy=YamlPolicy.from_file(DEFAULT_POLICY),
+                            approver=ScriptedApprover(default=AUTO), state_path=state)
+
+    with ConsoleEventLog(log_path, out=out) as log:
+        orchestrator(log, f"failures-{run_dir.name}").run()
+        print("\n>>> The human changes the request (adds a denylist). Re-planning from the change:",
+              file=out, flush=True)
+        changed = store.put("request", "Build a URL shortener that also rejects denylisted domains.",
+                            produced_by="human:requester")
+        again = orchestrator(log, f"failures-{run_dir.name}-replan")  # resumes the saved state
+        again.replan(["request"], cause=None)
+        summary = again.run()
+        print(f">>> request is now {changed.artifact.id}. Every node reading a changed input re-ran; "
+              "code and tests came out identical (same content hash), so verify was skipped",
+              file=out, flush=True)
+    return summary, store, log_path
+
+
 CASES: dict[str, Case] = {c.name: c for c in (
+    Case("replan-on-change", "A requirement changes after the run finished",
+         "dynamic re-planning: only nodes whose inputs changed re-run; unchanged outputs stop the cascade",
+         _replan_on_change),
     Case("policy-block", "Generated code contains a hard-coded secret",
          "post-run policy denies the commit; no retry; the secret never reaches the audit log", _policy_block),
     Case("human-reject", "A human rejects the architecture",

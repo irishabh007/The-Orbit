@@ -10,10 +10,11 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TextIO
 
-from demo.console import ConsoleEventLog, roles_for, wrap_roles
+from demo.console import ConsoleApprover, ConsoleEventLog, roles_for, wrap_roles
 from warden.agents import (
     BASELINE,
     ROLE_CLASSES,
@@ -21,7 +22,7 @@ from warden.agents import (
     build_agents,
     sdlc_graph,
 )
-from warden.approval import Approver
+from warden.approval import ApprovalDecision, Approver, ScriptedApprover
 from warden.artifacts import ArtifactStore
 from warden.bundle import is_bundle, pack, unpack
 from warden.dag import Graph
@@ -35,6 +36,7 @@ from warden.tools import GitRepo, VerifyAgent, publish
 ROOT = Path(__file__).resolve().parent.parent
 REQUESTS = Path(__file__).resolve().parent / "requests"
 BASELINES = Path(__file__).resolve().parent / "baselines"
+ANSWERS = Path(__file__).resolve().parent / "answers"
 DEFAULT_POLICY = ROOT / "policies" / "default.yaml"
 RUN_MARKER = ".warden-run"
 ROLES = tuple(cls.name for cls in ROLE_CLASSES)
@@ -49,6 +51,7 @@ class Scenario:
     request: str
     graph: Callable[[], Graph] = sdlc_graph
     baseline: dict[str, str] | None = None  # existing repo files (brownfield), path -> text
+    answers: str | None = None  # scripted human answers to clarifying questions (ambiguous)
 
 
 # scenario -> (baseline snapshot under demo/baselines, graph); others are greenfield-shaped
@@ -74,7 +77,25 @@ def load_scenario(name: str) -> Scenario:
         snapshot, graph = _BROWNFIELD[name]
         baseline = unpack((BASELINES / f"{snapshot}.json").read_text(encoding="utf-8"))
         return Scenario(name, request, graph, baseline)
+    answers_file = ANSWERS / f"{name}.md"
+    if answers_file.is_file():  # vague request: a human must review (and can answer) the spec
+        return Scenario(name, request, partial(sdlc_graph, require_spec_approval=True),
+                        answers=answers_file.read_text(encoding="utf-8"))
     return Scenario(name, request)
+
+
+AUTO_APPROVE = ApprovalDecision("approve", "auto-approve", "--auto-approve")
+
+
+def scenario_approver(scenario: Scenario, *, auto: bool, name: str = "reviewer") -> Approver:
+    """Interactive: a person at the terminal. Auto: approve every gate, except that a scenario
+    with scripted answers first sends them back to the requirements agent ("changes")."""
+    if not auto:
+        return ConsoleApprover(name)
+    script = {}
+    if scenario.answers:
+        script["requirements"] = [ApprovalDecision("changes", "product-owner (scripted)", scenario.answers.strip())]
+    return ScriptedApprover(script, default=AUTO_APPROVE)
 
 
 def _split(files: dict[str, str]) -> dict[str, dict[str, str]]:

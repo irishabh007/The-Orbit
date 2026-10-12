@@ -7,10 +7,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from demo.console import ConsoleApprover
 from demo.failures import CASES, run_case
-from demo.runner import REQUESTS, ROOT, load_scenario, run_scenario
-from warden.approval import ApprovalDecision, Approver, ScriptedApprover
+from demo.runner import REQUESTS, ROOT, load_scenario, run_scenario, scenario_approver
 from warden.llm import LLMClient, LLMError, RecordReplayClient, RetryingClient
 from warden.models import RunState
 
@@ -62,11 +60,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except LLMError as exc:
         print(f"Cannot use Gemini: {exc}", file=sys.stderr)
         return 2
-    approver: Approver
+    scenario = load_scenario(args.scenario)
     if args.auto_approve:
-        print("NOTE: --auto-approve grants every approval gate automatically (demo mode).")
-        approver = ScriptedApprover(default=ApprovalDecision("approve", "auto-approve", "--auto-approve"))
-    else:
-        approver = ConsoleApprover(args.approver)
-    result = run_scenario(load_scenario(args.scenario), args.out / args.scenario, llm, approver)
+        print("NOTE: --auto-approve grants every approval gate automatically (demo mode)"
+              + ("; clarifying questions get the scripted answers in demo/answers/." if scenario.answers else "."))
+    elif scenario.answers:
+        print("At the requirements gate, answer the questions with [c]hanges. Example answers:\n"
+              + scenario.answers)
+    approver = scenario_approver(scenario, auto=args.auto_approve, name=args.approver)
+    result = run_scenario(scenario, args.out / args.scenario, llm, approver)
     return 0 if result.summary.state == RunState.SUCCEEDED else 1

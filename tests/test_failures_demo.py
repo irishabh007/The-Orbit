@@ -25,7 +25,19 @@ class FailureDemoTests(unittest.TestCase):
 
     def test_all_cases_are_listed(self) -> None:
         self.assertEqual(set(CASES), {"policy-block", "human-reject", "retry-fallback-recover",
-                                      "retry-fallback-rollback", "safe-stop"})
+                                      "retry-fallback-rollback", "safe-stop", "replan-on-change"})
+
+    def test_upstream_change_replans_only_what_actually_changed(self) -> None:
+        result = self.run_named("replan-on-change")
+        self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
+        replans = self.events(result, EventType.REPLAN)
+        self.assertTrue(replans)
+        # second pass: every node that reads a changed input re-ran (the spec feeds most of them);
+        # code and tests came out byte-identical, so verify (running the test suite) was skipped
+        reran = {e["node_id"] for e in self.events(result, EventType.NODE_TRANSITION)
+                 if e["run_id"].endswith("-replan") and e["data"]["to"] == "RUNNING"}
+        self.assertEqual(reran, {"requirements", "architect", "developer", "tester", "docs", "release"})
+        self.assertNotIn("verify", reran)
 
     def test_policy_block_denies_without_retry_commit_or_leak(self) -> None:
         result = self.run_named("policy-block")

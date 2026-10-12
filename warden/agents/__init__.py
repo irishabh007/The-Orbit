@@ -54,11 +54,13 @@ def build_agents(llm: LLMClient | Mapping[str, LLMClient], *, repair_attempts: i
     return agents
 
 
-def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 3) -> Graph:
+def sdlc_graph(*, max_retries: int = 2, max_repair_loops: int = 3, require_spec_approval: bool = False) -> Graph:
+    """Greenfield graph. ``require_spec_approval``: a human signs off the spec (vague requests)."""
     spec, design = "spec.json", "design.json"
     built = ("code.bundle", "tests.bundle", "docs.bundle")
     return Graph([
-        NodeSpec("requirements", "requirements", (), ("request",), (spec,), max_retries=max_retries),
+        NodeSpec("requirements", "requirements", (), ("request",), (spec,),
+                 requires_approval=require_spec_approval, max_retries=max_retries),
         NodeSpec("architect", "architect", ("requirements",), (spec,), (design,),
                  requires_approval=True, max_retries=max_retries),
         NodeSpec("developer", "developer", ("architect",), (spec, design), ("code.bundle",),

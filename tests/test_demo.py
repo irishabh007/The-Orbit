@@ -10,7 +10,13 @@ from unittest import mock
 import pytest
 
 from demo.console import ConsoleApprover
-from demo.runner import RUN_MARKER, load_scenario, prepare_run_dir, run_scenario
+from demo.runner import (
+    RUN_MARKER,
+    load_scenario,
+    prepare_run_dir,
+    run_scenario,
+    scenario_approver,
+)
 from tests.test_agents import CODE, DOCS, REVIEW, TESTS, design, js, spec
 from warden.approval import ApprovalRequest, ScriptedApprover
 from warden.llm import RecordReplayClient, ScriptedClient
@@ -115,6 +121,31 @@ BROWNFIELD_IMPACT = {
     "risk": "medium", "risks": [{"risk": "data migration", "mitigation": "additive table"}],
     "regression_tests": ["tests/test_api.py"],
 }
+
+
+class AmbiguousScenarioTests(TmpCase):
+    def test_vague_request_comes_with_scripted_human_answers(self) -> None:
+        scenario = load_scenario("ambiguous")
+        self.assertIn("safer", scenario.request)
+        self.assertIsNotNone(scenario.answers)
+        self.assertTrue(scenario.graph().nodes["requirements"].requires_approval)
+
+    def test_questions_are_answered_by_a_human_and_requirements_replan(self) -> None:
+        question = {"id": "Q1", "question": "What does 'safer' mean?", "why_it_matters": "scope",
+                    "blocking": True, "proposed_default": "SSRF protection only"}
+        clients = {**scripted_clients(),
+                   "requirements": ScriptedClient([js(spec(open_questions=[question])),
+                                                   js(spec(assumptions=["malware denylist"]))])}
+        scenario = load_scenario("ambiguous")
+        assert scenario.answers is not None
+        result = run_scenario(scenario, self.root / "run", clients, scenario_approver(scenario, auto=True),
+                              verifier=passing_verifier(), publish_repo=False, out=io.StringIO())
+        self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
+        prompts = [c.prompt for c in clients["requirements"].calls]
+        self.assertEqual(len(prompts), 2)
+        self.assertIn(scenario.answers.strip().splitlines()[0], prompts[1])
+        spec_now = json.loads((result.run_dir / "spec.json").read_text("utf-8"))
+        self.assertIn("malware denylist", spec_now["assumptions"])
 
 
 class BrownfieldScenarioTests(TmpCase):
