@@ -6,7 +6,9 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 
 ## Commands
 - Test: `pytest -q`    Lint: `ruff check .`    Types: `mypy warden`
-- All three must pass before any commit. Keep tests fast (<2s total) and deterministic.
+- Slow tests (real pytest/ruff/git subprocesses): `pytest -q -m slow`
+- All four must pass before any commit. Keep the default suite fast (<2s total) and deterministic;
+  anything that spawns a subprocess gets `@pytest.mark.slow`.
 
 ## Architecture (read these first)
 - `warden/models.py`      node/run states + the legal transition table (single source of truth)
@@ -18,6 +20,7 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 - `warden/llm/`          LLMClient protocol; scripted, record/replay and Gemini (httpx) backends
 - `warden/agents/`       six SDLC roles with strict Pydantic output schemas + `sdlc_graph()`
 - `warden/bundle.py`     many generated files as one artifact; policy checks each file
+- `warden/tools/`        workspace writer, scrubbed-env command runner, verify node, git, publish
 - `warden/approval.py`    human approval interface; default approver REJECTS (fail closed)
 - `warden/orchestrator.py` scheduler: parallel branches + joins, retries -> fallback -> rollback,
                            approvals, safe-stop, replan, rollback, adopt (brownfield entry), resume
