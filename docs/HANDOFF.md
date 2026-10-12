@@ -107,3 +107,39 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - Recordings are keyed on the request only, not the model: a recording made with one Gemini model
   replays under another (the recording file names the model that produced it)
 - LLM calls are not yet in the event log (tokens, latency, backend); agents should report them
+
+## 6. Assessment alignment (update with every item)
+
+Traceability from the brief (paraphrased; the PDF is internal and stays out of the repo)
+to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the brief allows
+2-3 days of work; section 1's 24-hour figure was the original plan.
+
+| Brief requirement | Status | Where / evidence | Next |
+|---|---|---|---|
+| 1. Requirement understanding (intent, ambiguity, normalized problem) | todo | | Requirements agent (item 4), ambiguous scenario (item 6) |
+| 2. Task decomposition (tasks, dependencies, sequencing) | partial | `dag.py` graph model + validation | Planner agent emits the plan (item 4) |
+| 3. Brownfield codebase reasoning (impacted modules/APIs/data flows) | partial | `Orchestrator.adopt()` mid-graph entry | AST scanner + impact analysis (items 5, 6) |
+| 4a. Explicit DAG with entry/exit gates | done | `dag.py`; `test_dag.py`, gate tests in `test_orchestrator.py` | |
+| 4b. Sequential + parallel paths with synchronization | done | barrier and join tests in `test_orchestrator.py` | |
+| 4c. Cross-stage context and decision lineage | done | artifact input hashes, `caused_by` lineage tests | |
+| 4d. Human approval for high-impact actions | done | `approval.py`, node + policy escalation tests | Interactive CLI approver (item 6) |
+| 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests` | Failure demo (item 6) |
+| 4f. Policy guardrails: security | done | secrets + dependency allowlist, `test_policy.py` | Secret scanner tool on files (item 5) |
+| 4f. Policy guardrails: change control | done | protected paths + autonomy levels, `test_policy.py` | |
+| 4f. Policy guardrails: compliance | **gap** | only indirect (tamper-evident audit log, recorded approvals) | Decide an explicit compliance rule (e.g. PII in code/fixtures, license allowlist, required release sign-off) |
+| 4g. Audit-grade observability and traceability | partial | hash-chained `eventlog.py`, `verify()` | Run report with timeline + lineage (item 7); LLM calls in the log (item 4) |
+| 4h. Metrics: success rate, retry/rollback frequency, MTTR, end-to-end latency | todo | raw data already in events (`duration_ms`, retries, rollbacks) | Compute in run report (item 7) |
+| 4i. Dynamic re-planning on upstream change | done | `replan()`, stale-input discard tests | Ambiguous scenario shows it (item 6) |
+| 4j. Controlled agent autonomy | done | autonomy `full`/`supervised`/`none` per role | |
+| 5. Production-quality generated code, API/schema, tests, docs | todo | | Agents + tools + greenfield shortener (items 4-6) |
+| 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults | Risks/trade-offs write-up (item 8) |
+| 7. Humans own oversight, approvals, final quality | partial | fail-closed approver, supervised architect/release | Release reviewer agent, human final call (item 4) |
+| 8. Final engineering summary | todo | | item 8 |
+| Deliverable: runnable end-to-end prototype | todo | | `run_demo.py` (item 6), CI proof (item 9) |
+| Deliverable: architecture overview | partial | `CLAUDE.md` architecture list | README + architecture doc (item 8) |
+| Deliverable: three scenarios with decomposition, orchestration, validation | todo | | item 6 |
+| Deliverable: setup instructions | todo | `.env.example` | README quick start (item 8) |
+| Deliverable: testing approach, limitations, trade-offs | partial | section 5 above | item 8 |
+
+Supporting infrastructure done so far: LLM layer (`warden/llm/`, offline replay so reviewers
+need no key), rule 7 dependency check (`test_dependencies.py`).
