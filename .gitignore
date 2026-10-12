@@ -14,3 +14,5 @@ docs/evidence/**/.vs/
 docs/evidence/**/Properties/
 docs/evidence/**/*.csproj.user
 docs/evidence/**/*.db
+docs/evidence/**/*.db-shm
+docs/evidence/**/*.db-wal
