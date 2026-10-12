@@ -1,8 +1,9 @@
 # Warden: project handoff
 
-Put this file at `docs/HANDOFF.md` in the repo. Read `CLAUDE.md` (architecture and rules) first.
+Internal handoff for whoever continues this work (human or agent). Read `CLAUDE.md` first.
+Reviewer-facing documentation is in `README.md` and `docs/`.
 
-## 1. The assignment (technical assessment, 24-hour deadline)
+## 1. The assignment (technical assessment; the brief allows 2-3 days)
 
 Build a runnable prototype of an **agentic SDLC orchestrator**. The sample subject is a URL
 shortener, but the **orchestrator is the deliverable** (the brief calls it the critical
@@ -33,162 +34,66 @@ orchestrator can start from any point (brownfield).
 | Name | **Warden**; package `warden`; repo `warden-sdlc-orchestrator` |
 | Language | Python 3.11+; **standard library only in `warden/` core** (exception: PyYAML for policy files) |
 | Machine | Windows, Intel i5, 8 GB RAM: no Docker, no local models |
-| LLM | One `LLMClient` interface: Gemini free tier adapter (httpx), **record/replay** backend so reviewers run offline with no key, scripted fallback for failure demos |
+| LLM | One `LLMClient` interface: Gemini adapter (httpx, default `gemini-3.8-flash`), **record/replay** backend so reviewers run offline with no key, scripted fallback for failure demos |
 | Validation of LLM output | Pydantic schemas, retry on malformed output |
 | Rollback/features | git-based, per-feature commits (artifact-level rollback already implemented) |
-| Packaging | Plain `python -m venv` + `pip install -r requirements.txt` + one `run_demo.py` (`greenfield`, `brownfield`, `ambiguous`, `all`, `--auto-approve`). Docker optional, last |
-| CI | GitHub Actions: fresh Ubuntu install, tests, demos (proof the README works) |
+| Packaging | Plain `python -m venv` + `pip install -r requirements-demo.txt -r requirements-dev.txt` + `run_demo.py <greenfield|brownfield|ambiguous|failures>` (`--auto-approve`, `--record`, `--live`, `--prune`). No Docker |
+| CI | GitHub Actions on Ubuntu + Windows: fresh install, lint, types, tests, demos |
 | Claims | Narrow and defensible: "production-grade structure and practices", not "any requirement, fully production-ready" |
 
-## 3. Status
+## 3. Status (2026-10-12): development complete
 
-**Done and tested (123 tests):**
-- `models.py` states and transition table; `eventlog.py` hash chain + lineage; `artifacts.py` versioning, staleness, restore, drop
-- `dag.py`, `agent.py`, `approval.py` (interface + scripted + reject-all)
-- `policy.py` + `policies/default.yaml`: YAML engine with secrets (deny, never echoed to the log),
-  dependency allowlist (deny), protected paths (escalate to approval), autonomy per agent role
-  (`full` / `supervised` / `none`); fails closed on invalid policy files
-- `llm/`: `LLMClient` protocol; `ScriptedClient` (answers or exceptions, thread-safe);
-  `RecordReplayClient` (one JSON file per request hash; replay misses fail closed, errors never
-  recorded); `GeminiClient` (httpx, key in header, scrubbed from errors and repr, transient vs
-  permanent errors, no internal retries). Only `llm/gemini.py` may import httpx (test-enforced)
-- `agents/`: Requirements, Architect (+ planning), Developer, Tester, Docs, Release reviewer.
-  JSON-mode prompts validated by strict Pydantic schemas plus cross-artifact checks (tasks cite real
-  requirement ids, every must requirement has a task, no task cycles, role-scoped file paths);
-  one repair round with the errors fed back, then `AgentOutputError` -> orchestrator retry.
-  `sdlc_graph()`: requirements -> architect (approval) -> developer | tester | docs -> release
-  (approval). Blocking clarifying questions escalate to a human (`AgentResult.escalate`; agents can
-  only add oversight); answers come back as 'changes' feedback
-- `bundle.py`: code/tests/docs travel as one `*.bundle` artifact (safe relative paths only); the
-  policy engine expands bundles so secrets/dependency/protected-path rules see every file
-- `tools/`: `write_files` (workspace only, refuses `.git/` and paths escaping via symlinks);
-  `run_command` (timeout, allowlisted environment so generated code never sees keys);
-  `VerifyAgent` + `verify_gate` (pytest + ruff on a scratch copy of code + tests bundles);
-  `GitRepo` (init, commit, revert, log) and `publish()` (approved bundles -> one commit per
-  feature, run after the orchestrator succeeds, never by an agent)
-- Failure-driven re-planning: `NodeSpec.on_failure_replan` / `max_replans`. When verify fails,
-  its output becomes the developer's feedback and the developer plus everything below it re-run
-  (bounded; never for policy denials or human rejections). Graph: developer + tester -> verify
-  -> release (with docs)
-- `orchestrator.py`: parallel scheduling with joins, retry -> fallback -> rollback, approvals,
-  safe-stop (kill switch + step budget), replan, human rollback with hold/release, `adopt()` for
-  brownfield entry, persistence/resume
+All handoff items 1-9 are implemented and test-proven: 244 fast tests and 8 slow ones, with ruff and
+mypy clean, across 34 commits. For what exists and why, see `docs/ARCHITECTURE.md` and
+`docs/ENGINEERING_SUMMARY.md`, which also lists the 13 defects found by real-model runs.
 
-- `demo/` + `run_demo.py` (item 6, in progress): greenfield scenario; replay (default, offline) /
-  `--record` / `--live`; interactive or `--auto-approve`; successful runs publish one git commit
-  to `runs/<scenario>/repo`. `RetryingClient` (bounded backoff, transient only), quota-aware
-  Gemini errors, `PermanentAgentError` (no pointless retries), `fsutil.atomic_write`
+| Item | State |
+|---|---|
+| 1 Housekeeping | Done |
+| 2 YAML policy engine | Done: security, compliance (personal data), supply chain, change control, autonomy |
+| 3 LLM layer | Done: Gemini, record/replay (n-th repeat recorded separately, prune), scripted, bounded retry, quota-aware errors |
+| 4 Agents | Done: Requirements, Impact, Architect (+ plan), Developer, Tester, Docs, Release |
+| 5 Tools | Done: verify, scanner, workspace writer, scrubbed runner, git, publish |
+| 6 Demo and scenarios | Done: greenfield (**recorded**), brownfield and ambiguous (**built; not recorded**), 6 failure/control demos |
+| 7 Run report | Done: metrics and report from the audit log, `python -m warden.report` |
+| 8 Docs | Done: README, ARCHITECTURE, SCENARIOS, TESTING, ENGINEERING_SUMMARY, RECORDING |
+| 9 CI | Written (`.github/workflows/ci.yml`); **not yet run**: no GitHub remote configured |
 
-**Real-model status (gemini-3.8-flash):** greenfield recorded through a passing verify: 9
-requirements -> 18 files / ~1800 lines, generated tests 3 failing -> 1 -> all passing via the repair
-loop. Only the release review call is missing (free-tier daily quota of 20 requests hit).
+## 4. Remaining work
 
-**Known gaps:** greenfield recording incomplete (1 call); brownfield, ambiguous and failure demos
-not built; no report/metrics; no docs beyond this.
+1. **Record brownfield and ambiguous** with a paid key (owner's plan), following
+   `docs/RECORDING.md`. Free tier: 20 calls per day per project.
+2. **Push to GitHub and check CI.** The recorded-replay step is informational: recordings were made
+   on Windows, and tool output in repair prompts may differ on Linux or with newer packages. If it
+   misses, consider `-p no:warnings` for verify's pytest and re-record (this invalidates repair-loop
+   recordings).
+3. Optional improvements: tokens and cost per model call in the event log (a cost metric in the
+   report); container sandbox for verify; anchoring the log head hash externally; deleting files
+   in the generated repo.
 
-**Lessons from the first real runs** (each fixed with a test; good material for the summary):
-1. Windows `os.replace` fails while antivirus/indexer holds the file -> bounded retry
-2. Verify env lacked a policy-allowed package -> requirements-demo.txt must cover the allowlist
-3. Test failures routed only to the developer, who cannot edit tests -> route to both authors
-4. Repairs regenerated from scratch -> agents revise their own previous output
-5. Unpinned ruff defaults moved the goalposts -> lint pinned to E4,E7,E9,F
-6. A syntax error cost a whole repair loop -> `compile()` check inside the agent
-7. Feedback was consumed at launch, lost on retry -> kept until the node succeeds
-8. Retries replayed the same failed recording -> n-th identical request has its own recording
-9. Read-only git objects broke cleanup, and the run marker was deleted first -> fixed both
-10. Daily quota 429 treated as transient -> quota errors are permanent, not retried
+Constraint for whoever continues: **changing any agent prompt, schema, input or verify output
+format invalidates recordings** for the affected calls. Re-record afterwards.
 
-## 4. Remaining work, in priority order
+## 5. Known limitations
 
-Each item is done only when a test demonstrates it.
+See `docs/ENGINEERING_SUMMARY.md#limitations-stated-honestly`.
 
-1. ~~**Housekeeping.**~~ Done. Run `pytest -q`, `ruff check .`, `mypy warden`; fix findings. Commit.
-2. ~~**YAML policy engine**~~ Done. (`warden/policy.py`, `policies/default.yaml`): rules for secrets in
-   output, dependency allowlist, protected paths requiring approval, and max autonomy per node kind.
-   Pre and post checks; denials are never retried.
-3. ~~**LLM layer**~~ Done. (`warden/llm/`): `LLMClient` protocol; Gemini adapter via httpx (key from `.env`);
-   record/replay backend keyed by hash of prompt; scripted backend. Never log keys.
-4. ~~**Agents**~~ Done (`warden/agents/`): Requirements (vague text -> numbered requirements, acceptance
-   criteria, assumptions, clarifying questions), Architect (needs approval), Planner, Developer,
-   Tester, Docs, Release reviewer (human makes the final call). Strict Pydantic output schemas.
-5. ~~**Tools**~~ Done for greenfield; AST scanner moved to item 6 (brownfield), mypy on generated
-   code and a separate secret scanner deferred (policy already scans every file). Was: file writer (workspace only, protected paths), git adapter (commit per
-   feature, revert), test runner, ruff/mypy gate, secret scanner, AST codebase scanner (modules,
-   endpoints, imports) for brownfield impact analysis.
-6. **Demo entry point** `run_demo.py` and the three scenarios:
-   - Greenfield: URL shortener (`POST /shorten`, `GET /{code}`, `GET /analytics/{code}`; custom
-     alias, expiry, SSRF protection, rate limiting, health endpoint)
-   - Brownfield: scan the generated repo, enter mid-graph, add a feature (e.g. link expiry or rate
-     limiting), show impact analysis and an approval gate
-   - Ambiguous: "make links safer and give marketing better insights" -> clarifying questions ->
-     human answers -> replan
-   - Failure demos: retry -> fallback -> rollback, a policy block, a safe-stop
-7. **Run report** (Markdown/HTML) per scenario: Mermaid DAG, timeline, approvals, lineage, and
-   metrics computed from the event log (success rate, retries, rollbacks, MTTR, latency).
-8. **Docs:** README with a 5-command quick start at the top, architecture overview, testing
-   approach, ADRs for key decisions, limitations (honest), final engineering summary.
-9. **CI** workflow, then a fresh-clone test on a clean folder. Docker only if time remains.
+## 6. Assessment alignment
 
-If time runs short, protect in this order: DAG orchestrator with gates/parallelism/approvals;
-a retry-rollback-replan failure demo; the three scenarios with reports; README and architecture
-doc with honest limitations. Merge Planner into Architect before cutting anything else.
-
-## 5. Known limitations to state honestly
-
-- Event log is tamper-evident, not tamper-proof (anchor the head hash externally to close this)
-- In-process scheduler, one machine; no distributed workers
-- LLM output is nondeterministic; replay makes demos reproducible, not the model
-- Re-planning invalidates direct consumers lazily; in-flight results are discarded if inputs change
-- Policy secret scanning is regex-based: it catches common key formats and literal credential
-  assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
-  `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
-- Default test suite runs at about 1.9s on the dev laptop (Windows), at the 2s budget; subprocess
-  tests live in `pytest -m slow`. Only persistence tests write orchestrator state to disk.
-  `EventLog` keeps its append handle open, so callers must `close()` it (or use `with`) when done
-- Recordings are keyed on the request only, not the model: a recording made with one Gemini model
-  replays under another (the recording file names the model that produced it)
-- LLM calls are not yet in the event log (tokens, latency, backend); deferred to the improvement pass
-- Tester writes tests from the design in parallel with the Developer (contract-first). When they
-  disagree, verify always sends the developer back (tests are treated as the contract); a wrong
-  test therefore exhausts the repair loops and halts the run for a human
-- Generated code runs with the user's permissions (scrubbed environment and timeout, not a sandbox;
-  no Docker on the dev machine). Verify runs in Warden's interpreter, so the allowlisted packages
-  (fastapi, httpx, ...) must be installed there: item 6 adds a requirements file for the demo
-- Agents cannot delete files from the generated repo (publish only writes and overwrites)
-
-## 6. Assessment alignment (update with every item)
-
-Traceability from the brief (paraphrased; the PDF is internal and stays out of the repo)
-to this repo. Status: **done** (test-proven), **partial**, **todo**. Note: the brief allows
-2-3 days of work; section 1's 24-hour figure was the original plan.
-
-| Brief requirement | Status | Where / evidence | Next |
-|---|---|---|---|
-| 1. Requirement understanding (intent, ambiguity, normalized problem) | partial | `RequirementsAgent`; real run: 9 requirements with acceptance criteria and a blocking question from the greenfield brief | Ambiguous scenario (item 6) |
-| 2. Task decomposition (tasks, dependencies, sequencing) | done | `dag.py`; `ArchitectAgent` tasks with owners, `depends_on`, requirement traceability, cycle + coverage checks | Shown in run report (item 7) |
-| 3. Brownfield codebase reasoning (impacted modules/APIs/data flows) | partial | `Orchestrator.adopt()` mid-graph entry | AST scanner + impact analysis (items 5, 6) |
-| 4a. Explicit DAG with entry/exit gates | done | `dag.py`; `test_dag.py`, gate tests in `test_orchestrator.py` | |
-| 4b. Sequential + parallel paths with synchronization | done | barrier and join tests in `test_orchestrator.py` | |
-| 4c. Cross-stage context and decision lineage | done | artifact input hashes, `caused_by` lineage tests | |
-| 4d. Human approval for high-impact actions | done | `approval.py`; node, policy and agent escalation tests | Interactive CLI approver (item 6) |
-| 4e. Bounded retries, fallback, rollback, safe-stop | done | `FailureHandlingTests`, `ReplanRollbackAndSafetyTests`; feature rollback = `git revert` (`test_tools.py`, slow) | Failure demo (item 6) |
-| 4e+. Non-linear recovery (failure routed back upstream) | done | `RepairLoopTests`; real run: generated tests 3 failing -> 1 -> 0 over repair loops | Shown in the run report (item 7) |
-| 4f. Policy guardrails: security | done | secrets + dependency allowlist, `test_policy.py` | Secret scanner tool on files (item 5) |
-| 4f. Policy guardrails: change control | done | protected paths + autonomy levels, `test_policy.py` | |
-| 4f. Policy guardrails: compliance | **gap** | only indirect (tamper-evident audit log, recorded approvals) | Decide an explicit compliance rule (e.g. PII in code/fixtures, license allowlist, required release sign-off) |
-| 4g. Audit-grade observability and traceability | partial | hash-chained `eventlog.py`, `verify()` | Run report with timeline + lineage (item 7); LLM calls in the log (deferred) |
-| 4h. Metrics: success rate, retry/rollback frequency, MTTR, end-to-end latency | todo | raw data already in events (`duration_ms`, retries, rollbacks) | Compute in run report (item 7) |
-| 4i. Dynamic re-planning on upstream change | done | `replan()`, stale-input discard tests | Ambiguous scenario shows it (item 6) |
-| 4j. Controlled agent autonomy | done | autonomy `full`/`supervised`/`none` per role | |
-| 5. Production-quality generated code, API/schema, tests, docs | partial | real run: FastAPI app (config, db, service, SSRF guard, rate limiter, JSON logging), 30 passing tests, README + docs | Finish recording; human review of output quality |
-| 6. Validation and risk control (risks, failure scenarios, guardrails) | partial | gates, policy, fail-closed defaults, verify gate, scrubbed env for generated code | Risks/trade-offs write-up (item 8) |
-| 7. Humans own oversight, approvals, final quality | done | fail-closed approver; approval on architect + release in the graph; Release agent only recommends | |
-| 8. Final engineering summary | todo | | item 8 |
-| Deliverable: runnable end-to-end prototype | partial | `run_demo.py greenfield` ran end to end live (published a commit) | Complete recordings so it replays offline; CI proof (item 9) |
-| Deliverable: architecture overview | partial | `CLAUDE.md` architecture list | README + architecture doc (item 8) |
-| Deliverable: three scenarios with decomposition, orchestration, validation | todo | | item 6 |
-| Deliverable: setup instructions | todo | `.env.example` | README quick start (item 8) |
-| Deliverable: testing approach, limitations, trade-offs | partial | section 5 above | item 8 |
-
-Supporting infrastructure done so far: LLM layer (`warden/llm/`, offline replay so reviewers
-need no key), rule 7 dependency check (`test_dependencies.py`).
+| Brief requirement | Status | Evidence |
+|---|---|---|
+| 1 Requirement understanding | Done | Requirements agent; real run: 9 requirements, 4 questions; ambiguous scenario (scripted answers) |
+| 2 Task decomposition | Done | Architect tasks with owners, dependencies, traceability; real run: 12 tasks |
+| 3 Brownfield codebase reasoning | Done (recording pending) | Scanner + grounded impact agent; `BrownfieldScenarioTests` |
+| 4 DAG, gates, parallel + joins | Done | `dag.py`, orchestrator tests |
+| 4 Lineage | Done | `caused_by` + content hashes; report traces the release to every human decision |
+| 4 Human approval checkpoints | Done | Graph, policy and agent escalation; fail-closed approver |
+| 4 Retry, fallback, rollback, safe-stop | Done | Tests + `run_demo.py failures` |
+| 4 Policy: security, compliance, change control | Done | `policies/default.yaml`, `test_policy.py` |
+| 4 Observability and metrics | Done | `report.py`: success rate, retry/rollback frequency, MTTR, latency |
+| 4 Dynamic re-planning | Done | `replan()`, repair loops, `replan-on-change` demo |
+| 5 Engineering output | Done | Generated repo: 18 files, 30 passing tests, README and docs |
+| 6 Validation and risk control | Done | Verify gate, policy, risk table in the engineering summary |
+| 7 Controlled autonomy | Done | Autonomy per role; release decided by a human |
+| 8 Engineering summary | Done | `docs/ENGINEERING_SUMMARY.md` |
+| Deliverables: prototype, architecture, 3 scenarios, setup, testing, limitations | Done | `README.md`, `docs/` (2 of 3 scenarios still to record) |
