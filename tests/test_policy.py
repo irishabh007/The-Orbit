@@ -165,6 +165,40 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("secrets", decision.rule)
 
 
+FAKE_SSN = "123-" + "45-6789"  # split so this file never matches a scanner
+VALID_CARD = "4111 1111 " + "1111 1111"  # well-known test card number; passes the Luhn check
+INVALID_CARD = "4111 1111 " + "1111 1112"  # same shape, fails Luhn
+
+
+class ComplianceRuleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = YamlPolicy.from_dict(rules(compliance={"pii_patterns": [
+            {"name": "us-ssn", "regex": r"\b(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"},
+            {"name": "payment-card", "regex": r"\b[3-6]\d{3}([ -]?)\d{4}\1\d{4}\1\d{4}\b", "luhn": True},
+        ]}))
+
+    def post(self, text: str) -> Any:
+        return self.policy.check_post(node(produces=("tests.bundle",)),
+                                      AgentResult({"tests.bundle": pack({"tests/fixtures.py": f"X = '{text}'\n"})}))
+
+    def test_personal_data_in_fixtures_is_denied_without_echoing_it(self) -> None:
+        for value in (FAKE_SSN, VALID_CARD):
+            with self.subTest(value=value):
+                decision = self.post(value)
+                self.assertFalse(decision.allow)
+                self.assertIn("compliance", decision.rule)
+                self.assertIn("tests.bundle:tests/fixtures.py line 1", decision.reason)
+                self.assertNotIn(value, decision.reason)
+
+    def test_luhn_check_avoids_false_positives(self) -> None:
+        self.assertTrue(self.post(INVALID_CARD).allow)
+        self.assertTrue(self.post("1700000000000").allow)  # epoch millis, not a card
+
+    def test_luhn_flag_must_be_boolean(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "luhn"):
+            YamlPolicy.from_dict(rules(compliance={"pii_patterns": [{"name": "x", "regex": "x", "luhn": "yes"}]}))
+
+
 class BundleExpansionTests(unittest.TestCase):
     """Bundles (many files in one artifact) are checked file by file."""
 
@@ -244,6 +278,10 @@ class DefaultPolicyTests(unittest.TestCase):
 
     def test_denies_unlisted_dependency(self) -> None:
         self.assertFalse(self.post("developer", {"requirements.txt": "fastapi\nleftpad\n"}).allow)
+
+    def test_catches_personal_data_in_test_fixtures(self) -> None:
+        self.assertFalse(self.post("tester", {"tests/data.py": f"SSN = '{FAKE_SSN}'\n"}).allow)
+        self.assertFalse(self.post("tester", {"tests/data.py": f"CARD = '{VALID_CARD}'\n"}).allow)
 
     def test_ci_workflow_needs_approval(self) -> None:
         self.assertTrue(self.post("developer", {".github/workflows/ci.yml": "on: push\n"}).requires_approval)

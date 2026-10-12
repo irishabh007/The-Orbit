@@ -24,6 +24,17 @@ secrets:
       # password = "literal" style assignments; env lookups (os.environ[...]) do not match
       regex: '(?i)\b[\w-]*(?:password|passwd|secret|api[_-]?key|token)\b["'']?\s*[:=]\s*["''][^"''\s]{8,}["'']'
 
+# Compliance (data protection): generated code, tests and fixtures must not contain real
+# personal data. Deny on match; reasons name the pattern and line, never the value.
+# Payment cards are confirmed with the Luhn checksum to avoid flagging arbitrary numbers.
+compliance:
+  pii_patterns:
+    - name: us-ssn
+      regex: '\b(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b'
+    - name: payment-card
+      regex: '\b[3-6]\d{3}([ -]?)\d{4}\1\d{4}\1\d{4}\b'
+      luhn: true
+
 # Security / supply chain: manifests (matched on file name, any directory) may only
 # list these packages. pip options (-e, --index-url) and direct URLs are denied.
 # Extend the allowlist through a reviewed change to this file.

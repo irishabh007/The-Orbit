@@ -7,6 +7,8 @@ retrying a policy violation just burns budget.
 ``YamlPolicy`` rules:
 * ``secrets``          post: deny if any output (or the summary, which is logged) matches
                        a secret pattern. Reasons name the pattern and line, never the match.
+* ``compliance``       post: deny personal data (e.g. SSNs, payment cards with a Luhn check)
+                       in outputs; generated code and fixtures must not carry real PII.
 * ``dependencies``     post: deny dependency manifests that list a package outside the
                        allowlist, use pip options, direct URLs, or cannot be parsed.
 * ``protected_paths``  post: escalate to human approval when an output path matches.
@@ -66,7 +68,7 @@ class PolicyError(ValueError):
 
 
 AUTONOMY_LEVELS = ("full", "supervised", "none")
-_TOP_KEYS = {"version", "secrets", "dependencies", "protected_paths", "autonomy"}
+_TOP_KEYS = {"version", "secrets", "compliance", "dependencies", "protected_paths", "autonomy"}
 _REQ_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _COMMENT = re.compile(r"(^|\s)#.*")
 
@@ -94,6 +96,33 @@ def _normalize_path(name: str) -> str:
 
 def _normalize_pkg(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()  # PEP 503
+
+
+def _patterns(entries: Any, where: str, *, allow_luhn: bool = False) -> dict[str, tuple[re.Pattern[str], bool]]:
+    """Parse a list of {name, regex[, luhn]} entries; fail closed on anything malformed."""
+    if not isinstance(entries, list):
+        raise PolicyError(f"{where}: expected a list")
+    allowed_keys = {"name", "regex", "luhn"} if allow_luhn else {"name", "regex"}
+    out: dict[str, tuple[re.Pattern[str], bool]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not {"name", "regex"} <= set(entry) <= allowed_keys:
+            raise PolicyError(f"{where}: each entry needs 'name' and 'regex'"
+                              + (" (optional 'luhn')" if allow_luhn else " only"))
+        name, luhn = str(entry["name"]), entry.get("luhn", False)
+        if not isinstance(luhn, bool):
+            raise PolicyError(f"{where}: {name}: 'luhn' must be true or false")
+        try:
+            out[name] = (re.compile(str(entry["regex"])), luhn)
+        except re.error as exc:
+            raise PolicyError(f"{where}: {name}: invalid regex: {exc}") from exc
+    return out
+
+
+def _luhn_ok(candidate: str) -> bool:
+    """Payment-card checksum: cuts false positives from arbitrary long digit strings."""
+    digits = [int(c) for c in candidate if c.isdigit()]
+    total = sum(d if i % 2 == 0 else (d * 2 - 9 if d * 2 > 9 else d * 2) for i, d in enumerate(reversed(digits)))
+    return len(digits) >= 13 and total % 10 == 0
 
 
 def _as_text(content: str | bytes) -> str:
@@ -125,8 +154,10 @@ class YamlPolicy:
         protected_paths: list[str],
         default_autonomy: str,
         autonomy_roles: dict[str, str],
+        pii_patterns: dict[str, tuple[re.Pattern[str], bool]] | None = None,  # name -> (regex, luhn)
     ) -> None:
         self.secret_patterns = secret_patterns
+        self.pii_patterns = pii_patterns or {}
         self.manifests = manifests
         self.allowed_packages = allowed_packages
         self.protected_paths = protected_paths
@@ -152,15 +183,10 @@ class YamlPolicy:
         if raw.get("version") != 1:
             raise PolicyError(f"unsupported policy version: {raw.get('version')!r} (expected 1)")
 
-        patterns: dict[str, re.Pattern[str]] = {}
-        for entry in _section(raw, "secrets", {"patterns"}).get("patterns", []):
-            if not isinstance(entry, dict) or set(entry) != {"name", "regex"}:
-                raise PolicyError("secrets.patterns: each entry needs exactly 'name' and 'regex'")
-            name, regex = str(entry["name"]), str(entry["regex"])
-            try:
-                patterns[name] = re.compile(regex)
-            except re.error as exc:
-                raise PolicyError(f"secrets.patterns: {name}: invalid regex: {exc}") from exc
+        secrets = _patterns(_section(raw, "secrets", {"patterns"}).get("patterns", []), "secrets.patterns")
+        patterns = {name: regex for name, (regex, _) in secrets.items()}
+        pii = _patterns(_section(raw, "compliance", {"pii_patterns"}).get("pii_patterns", []),
+                        "compliance.pii_patterns", allow_luhn=True)
 
         deps = _section(raw, "dependencies", {"manifests", "allowed"})
         manifests = _str_list(deps.get("manifests", []), "dependencies.manifests")
@@ -176,7 +202,8 @@ class YamlPolicy:
             if level not in AUTONOMY_LEVELS:
                 raise PolicyError(f"{where}: unknown autonomy level {level!r}, expected one of {AUTONOMY_LEVELS}")
 
-        return cls(patterns, manifests, allowed, protected, default, {str(k): v for k, v in roles.items()})
+        return cls(patterns, manifests, allowed, protected, default, {str(k): v for k, v in roles.items()},
+                   pii_patterns=pii)
 
     # ---- checks --------------------------------------------------------
     def autonomy(self, role: str) -> str:
@@ -193,6 +220,7 @@ class YamlPolicy:
         files, findings = self._expand(result)
         findings += [
             *self._secrets(files, result.summary),
+            *self._compliance(files, result.summary),
             *self._dependencies(files),
             *self._protected(files),
         ]
@@ -238,6 +266,17 @@ class YamlPolicy:
                 if match:  # report location only: the matched text must never reach the log
                     line = text.count("\n", 0, match.start()) + 1
                     yield _Finding("secrets", f"possible secret ({pname}) in {source} line {line}", deny=True)
+
+    def _compliance(self, files: list[_File], summary: str) -> Iterable[_Finding]:
+        sources = [(f.label, f.text) for f in files]
+        sources.append(("summary", summary))
+        for source, text in sources:
+            for pname, (pattern, luhn) in self.pii_patterns.items():
+                match = next((m for m in pattern.finditer(text) if not luhn or _luhn_ok(m.group())), None)
+                if match:  # location only: personal data must never reach the log either
+                    line = text.count("\n", 0, match.start()) + 1
+                    yield _Finding("compliance", f"possible personal data ({pname}) in {source} line {line}",
+                                   deny=True)
 
     def _dependencies(self, files: list[_File]) -> Iterable[_Finding]:
         for f in files:
