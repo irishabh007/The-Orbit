@@ -232,6 +232,15 @@ class ConsoleApproverTests(unittest.TestCase):
         for text in ("architect", "3 components, 5 tasks", "design.json", "node requires approval"):
             self.assertIn(text, shown)
 
+    def test_view_shows_the_staged_content_before_deciding(self) -> None:
+        replies = iter(["v", "a"])
+        out = io.StringIO()
+        request = ApprovalRequest("run1", "architect", "summary", ("design.json",), "node requires approval",
+                                  preview=(("design.json", '{"overview": "FastAPI over SQLite"}'),))
+        decision = ConsoleApprover("alice", input_fn=lambda _: next(replies), out=out).decide(request)
+        self.assertEqual(decision.verdict, "approve")
+        self.assertIn("FastAPI over SQLite", out.getvalue())
+
     def test_changes_require_a_comment_and_bad_input_reprompts(self) -> None:
         decision, _ = self.decide("maybe", "c", "", "add rate limiting")
         self.assertEqual((decision.verdict, decision.comment),  # type: ignore[attr-defined]

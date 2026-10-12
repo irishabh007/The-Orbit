@@ -250,6 +250,22 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertEqual(summary.state, RunState.FAILED)
         self.assertIsNone(self.store.latest("design"))
 
+    def test_approver_sees_a_preview_of_what_it_is_approving(self) -> None:
+        from warden.bundle import pack
+        bundle = pack({"app/main.py": "line\n" * 30, "requirements.txt": "fastapi\n"})
+        agents = self.default_agents()
+        agents["impl"] = FunctionAgent("impl", lambda ctx: AgentResult({"code": bundle}))
+        nodes = sdlc_nodes(impl=NodeSpec("impl", "impl", ("design",), ("design",), ("code",),
+                                         requires_approval=True))
+        approver = ScriptedApprover()
+        self.build(nodes, agents, approver=approver).run()
+        (request,) = [r for r in approver.requests if r.node_id == "impl"]
+        preview = dict(request.preview)
+        self.assertIn("app/main.py (30 lines)", preview["code"])
+        self.assertIn("requirements.txt (1 lines)", preview["code"])
+        # previews are for the human only: never written to the audit log
+        self.assertNotIn("app/main.py (30 lines)", self.log.path.read_text("utf-8"))
+
     def test_approval_granted_commits_and_is_audited(self) -> None:
         nodes = sdlc_nodes(design=NodeSpec("design", "design", ("req",), ("spec",), ("design",),
                                            requires_approval=True))

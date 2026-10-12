@@ -28,6 +28,7 @@ from warden.approval import (
     ApprovalRequest,
     Approver,
     RejectAllApprover,
+    preview_outputs,
 )
 from warden.artifacts import ArtifactStore
 from warden.dag import Graph
@@ -358,7 +359,8 @@ class Orchestrator:
                             self._own(nid))
             self._transition(nid, NodeState.AWAITING_APPROVAL)
             decision: ApprovalDecision = self.approver.decide(
-                ApprovalRequest(self.run_id, nid, result.summary, tuple(sorted(result.outputs)), why))
+                ApprovalRequest(self.run_id, nid, result.summary, tuple(sorted(result.outputs)), why,
+                                preview=preview_outputs(result.outputs)))
             # the decision becomes this node's latest cause, so whatever follows (commit or
             # failure) links back to the human who made it: decision lineage reaches people
             self._rec[nid].last_event = self._log(

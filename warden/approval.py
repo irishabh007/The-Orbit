@@ -6,8 +6,11 @@ needs approval can proceed. Fail closed, not open.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
+
+from warden.bundle import BundleError, unpack
 
 Verdict = Literal["approve", "reject", "changes"]
 
@@ -19,6 +22,28 @@ class ApprovalRequest:
     summary: str
     artifacts: tuple[str, ...]
     reason: str  # why a human is needed (node policy, or a policy escalation)
+    # (artifact, readable excerpt) of the staged outputs, so the human sees what they approve.
+    # Built after the post-run policy passed (no secrets); shown to the human, never logged.
+    preview: tuple[tuple[str, str], ...] = ()
+
+
+_PREVIEW_CHARS = 6000
+
+
+def preview_outputs(outputs: Mapping[str, str | bytes]) -> tuple[tuple[str, str], ...]:
+    """Readable excerpts: bundles as a file list with line counts, other text truncated."""
+    previews = []
+    for name in sorted(outputs):
+        content = outputs[name]
+        text = content if isinstance(content, str) else content.decode("utf-8", errors="replace")
+        try:
+            files = unpack(text)
+        except BundleError:
+            excerpt = text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + "\n... (truncated)"
+        else:
+            excerpt = "\n".join(f"{path} ({len(body.splitlines())} lines)" for path, body in sorted(files.items()))
+        previews.append((name, excerpt))
+    return tuple(previews)
 
 
 @dataclass(frozen=True)

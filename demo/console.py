@@ -72,11 +72,17 @@ class ConsoleApprover:
         print(f"Artifacts: {', '.join(request.artifacts)}", file=p)
         print(f"Summary:   {request.summary}", file=p)
         print("=" * 78, file=p, flush=True)
+        options = "[a]pprove / [r]eject / [c]hanges requested" + (" / [v]iew outputs" if request.preview else "")
         while True:
-            answer = self._input("[a]pprove / [r]eject / [c]hanges requested: ").strip().lower()[:1]
+            answer = self._input(f"{options}: ").strip().lower()[:1]
             if answer in _VERDICTS:
                 break
-            print("Please answer a, r or c.", file=p, flush=True)
+            if answer == "v" and request.preview:
+                for name, excerpt in request.preview:
+                    print(f"\n--- {name} ---\n{excerpt}", file=p)
+                print(file=p, flush=True)
+                continue
+            print("Please answer a, r or c" + (" (or v to view)." if request.preview else "."), file=p, flush=True)
         verdict = _VERDICTS[answer]
         comment = ""
         while verdict != "approve" and not comment:
