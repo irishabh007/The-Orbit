@@ -59,12 +59,20 @@ def load_scenario(name: str) -> Scenario:
 def prepare_run_dir(path: str | Path) -> Path:
     """Fresh output directory. Only ever deletes a directory this demo created itself."""
     run_dir = Path(path)
+    marker = run_dir / RUN_MARKER
     if run_dir.exists():
-        if not (run_dir / RUN_MARKER).exists() and any(run_dir.iterdir()):
+        if not marker.exists() and any(run_dir.iterdir()):
             raise ValueError(f"{run_dir} exists and was not created by run_demo.py; refusing to delete it")
-        shutil.rmtree(run_dir, onerror=_make_writable_and_retry)
-    run_dir.mkdir(parents=True)
-    (run_dir / RUN_MARKER).write_text("Created by run_demo.py; safe to delete.\n", encoding="utf-8")
+        # clear everything except the marker, so an interrupted cleanup stays recognisably ours
+        for child in run_dir.iterdir():
+            if child == marker:
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child, onerror=_make_writable_and_retry)
+            else:
+                child.unlink()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    marker.write_text("Created by run_demo.py; safe to delete.\n", encoding="utf-8")
     return run_dir
 
 

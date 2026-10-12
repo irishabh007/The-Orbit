@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from collections.abc import Sequence
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -63,6 +64,24 @@ class RunDirTests(TmpCase):
         locked.chmod(stat.S_IREAD)
         prepare_run_dir(self.root / "r")
         self.assertFalse(locked.exists())
+
+    def test_interrupted_cleanup_keeps_the_marker_so_a_rerun_still_works(self) -> None:
+        run_dir = prepare_run_dir(self.root / "r")
+        (run_dir / "repo").mkdir()
+
+        def rmtree_that_fails_midway(path: Path, **_: object) -> None:
+            # what really happened: removing the whole run dir deleted top-level files
+            # (the marker) first, then hit a locked file inside repo/.git
+            if Path(path) == run_dir:
+                (run_dir / RUN_MARKER).unlink()
+            raise OSError("locked")
+
+        with mock.patch("demo.runner.shutil.rmtree", side_effect=rmtree_that_fails_midway), \
+                self.assertRaises(OSError):
+            prepare_run_dir(self.root / "r")
+        self.assertTrue((run_dir / RUN_MARKER).exists())
+        prepare_run_dir(self.root / "r")  # not refused: still recognisably ours
+        self.assertFalse((run_dir / "repo").exists())
 
     def test_refuses_to_wipe_a_directory_it_did_not_create(self) -> None:
         precious = self.root / "precious"
