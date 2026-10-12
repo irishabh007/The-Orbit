@@ -99,3 +99,5 @@ Everything else is real.
 | `retry-fallback-rollback` | Fallback fails too → node rolled back, run halted, nothing committed |
 | `safe-stop` | Step budget exhausted → in-flight work discarded, SAFE_STOPPED |
 | `replan-on-change` | Finished run, then the request changes → only nodes reading a changed input re-run; verify is skipped because code and tests came out byte-identical |
+| `human-rollback` | After release a reviewer rolls back the developer's work → code reverted, verify and release invalidated, node **held** (a run while held is BLOCKED) → reviewer releases → feature rebuilt, re-verified, re-approved |
+| `resume-midway` | Approved spec and design already exist → `adopt()` marks requirements and architect done → the run starts at the developer (start from any point) |

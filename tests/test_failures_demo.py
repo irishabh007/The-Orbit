@@ -25,7 +25,27 @@ class FailureDemoTests(unittest.TestCase):
 
     def test_all_cases_are_listed(self) -> None:
         self.assertEqual(set(CASES), {"policy-block", "human-reject", "retry-fallback-recover",
-                                      "retry-fallback-rollback", "safe-stop", "replan-on-change"})
+                                      "retry-fallback-rollback", "safe-stop", "replan-on-change",
+                                      "human-rollback", "resume-midway"})
+
+    def test_human_rollback_holds_the_feature_until_released_then_redoes_it(self) -> None:
+        result = self.run_named("human-rollback")
+        self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
+        runs = {e["run_id"]: e["data"] for e in self.events(result, EventType.RUN_FINISHED)}
+        held = next(v for k, v in runs.items() if k.endswith("-held"))
+        self.assertEqual(held["state"], "BLOCKED")  # nothing downstream ran while the feature was held
+        rollback = next(e for e in self.events(result, EventType.ROLLBACK) if e["data"].get("by"))
+        self.assertEqual(rollback["data"]["by"], "human:reviewer")
+        self.assertIn("code.bundle", rollback["data"]["reverted"])
+
+    def test_resume_midway_adopts_existing_artifacts_and_starts_at_the_developer(self) -> None:
+        result = self.run_named("resume-midway")
+        self.assertEqual(result.summary.state, RunState.SUCCEEDED, result.summary.reason)
+        ran = {e["node_id"] for e in self.events(result, EventType.NODE_TRANSITION) if e["data"]["to"] == "RUNNING"}
+        self.assertNotIn("requirements", ran)
+        self.assertNotIn("architect", ran)
+        adopted = {e["node_id"] for e in self.events(result, EventType.NODE_TRANSITION) if e["data"].get("adopted")}
+        self.assertEqual(adopted, {"requirements", "architect"})
 
     def test_upstream_change_replans_only_what_actually_changed(self) -> None:
         result = self.run_named("replan-on-change")

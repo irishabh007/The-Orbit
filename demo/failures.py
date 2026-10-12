@@ -31,6 +31,7 @@ from warden.tools import Check, CommandResult, VerifyAgent
 # A well-formed AWS access key id, assembled at runtime so this file itself stays clean.
 PLANTED_SECRET = "AKIA" + "Z7Q3EXAMPLEKEY12"
 AUTO = ApprovalDecision("approve", "auto-approve", "failure demo")
+REQUESTER = "human:requester"
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ def _execute(run_dir: Path, out: TextIO, clients: dict[str, LLMClient], *, appro
              graph: Graph | None = None, extra_agents: dict[str, DeveloperAgent] | None = None,
              config: Config | None = None) -> tuple[RunSummary, ArtifactStore, Path]:
     store = ArtifactStore(run_dir / "artifacts")
-    store.put("request", "Build a URL shortener (scripted failure demo).", produced_by="human:requester")
+    store.put("request", "Build a URL shortener (scripted failure demo).", produced_by=REQUESTER)
     agents = build_agents(clients, verifier=_scripted_verifier())
     agents.update(extra_agents or {})
     log_path = run_dir / "events.jsonl"
@@ -121,22 +122,14 @@ def _replan_on_change(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactS
         *ANSWERS["requirements"]["requirements"],
         {"id": "R3", "text": "Reject targets on a malware domain denylist", "category": "security",
          "priority": "should", "acceptance_criteria": ["denylisted domain -> 422"]}]}
-    clients = _clients(requirements=ScriptedClient([js(ANSWERS["requirements"]), js(revised)]))
-    agents = build_agents(clients, verifier=_scripted_verifier())
-    store = ArtifactStore(run_dir / "artifacts")
-    store.put("request", "Build a URL shortener (scripted demo).", produced_by="human:requester")
-    log_path, state = run_dir / "events.jsonl", run_dir / "state.json"
-
-    def orchestrator(log: ConsoleEventLog, run_id: str) -> Orchestrator:
-        return Orchestrator(sdlc_graph(), agents, store, log, run_id, policy=YamlPolicy.from_file(DEFAULT_POLICY),
-                            approver=ScriptedApprover(default=AUTO), state_path=state)
-
+    store, log_path, orchestrator = _session(
+        run_dir, _clients(requirements=ScriptedClient([js(ANSWERS["requirements"]), js(revised)])))
     with ConsoleEventLog(log_path, out=out) as log:
         orchestrator(log, f"failures-{run_dir.name}").run()
         print("\n>>> The human changes the request (adds a denylist). Re-planning from the change:",
               file=out, flush=True)
         changed = store.put("request", "Build a URL shortener that also rejects denylisted domains.",
-                            produced_by="human:requester")
+                            produced_by=REQUESTER)
         again = orchestrator(log, f"failures-{run_dir.name}-replan")  # resumes the saved state
         again.replan(["request"], cause=None)
         summary = again.run()
@@ -146,7 +139,65 @@ def _replan_on_change(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactS
     return summary, store, log_path
 
 
+def _session(run_dir: Path, clients: dict[str, LLMClient]) -> tuple[
+        ArtifactStore, Path, Callable[[ConsoleEventLog, str], Orchestrator]]:
+    """Store + log path + an orchestrator factory sharing one persisted state (multi-step demos)."""
+    agents = build_agents(clients, verifier=_scripted_verifier())
+    store = ArtifactStore(run_dir / "artifacts")
+    store.put("request", "Build a URL shortener (scripted demo).", produced_by=REQUESTER)
+    state = run_dir / "state.json"
+
+    def orchestrator(log: ConsoleEventLog, run_id: str) -> Orchestrator:
+        return Orchestrator(sdlc_graph(), agents, store, log, run_id, policy=YamlPolicy.from_file(DEFAULT_POLICY),
+                            approver=ScriptedApprover(default=AUTO), state_path=state)
+    return store, run_dir / "events.jsonl", orchestrator
+
+
+def _human_rollback(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactStore, Path]:
+    """A human rolls back a finished feature at any time; it stays held until released."""
+    store, log_path, orchestrator = _session(run_dir, _clients())
+    base = f"failures-{run_dir.name}"
+    with ConsoleEventLog(log_path, out=out) as log:
+        orchestrator(log, base).run()
+        print("\n>>> After release, a reviewer finds a bug and rolls back the developer's work:", file=out, flush=True)
+        reverted = orchestrator(log, f"{base}-rollback").rollback(
+            "developer", reason="reviewer found a bug in the redirect handler", actor="human:reviewer")
+        print(f">>> Reverted {reverted}. Everything built on it is invalidated; the developer node is held.",
+              file=out, flush=True)
+        held = orchestrator(log, f"{base}-held").run()
+        print(f">>> Running while held: {held.state.value} ({'; '.join(held.blocked.values())}). Nothing "
+              "downstream of the rolled-back feature runs until a human releases it.", file=out, flush=True)
+        resumed = orchestrator(log, f"{base}-released")
+        resumed.release("developer")
+        print(">>> The reviewer releases the node; the feature is rebuilt, re-verified and re-approved:",
+              file=out, flush=True)
+        summary = resumed.run()
+    return summary, store, log_path
+
+
+def _resume_midway(run_dir: Path, out: TextIO) -> tuple[RunSummary, ArtifactStore, Path]:
+    """Start from any point: adopt an approved spec and design that already exist."""
+    store, log_path, orchestrator = _session(run_dir, _clients())
+    store.put("spec.json", js(ANSWERS["requirements"]), kind="requirements", produced_by="human:product-owner")
+    store.put("design.json", js(ANSWERS["architect"]), kind="design", produced_by="human:architect",
+              inputs=["spec.json"])
+    with ConsoleEventLog(log_path, out=out) as log:
+        orch = orchestrator(log, f"failures-{run_dir.name}")
+        print(">>> An approved spec and design already exist; adopting them instead of regenerating:",
+              file=out, flush=True)
+        for node in ("requirements", "architect"):
+            orch.adopt(node, actor="human:tech-lead")
+        summary = orch.run()
+    return summary, store, log_path
+
+
 CASES: dict[str, Case] = {c.name: c for c in (
+    Case("human-rollback", "A human rolls back a shipped feature",
+         "rollback at any time: outputs reverted, dependants invalidated, node held until a human releases it",
+         _human_rollback),
+    Case("resume-midway", "Start from the middle with existing, approved artifacts",
+         "adopt(): requirements and architect are not re-run; the run starts at the developer",
+         _resume_midway),
     Case("replan-on-change", "A requirement changes after the run finished",
          "dynamic re-planning: only nodes whose inputs changed re-run; unchanged outputs stop the cascade",
          _replan_on_change),

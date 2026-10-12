@@ -16,7 +16,7 @@ hash-chained audit log from which every reported metric is computed.
 python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-demo.txt -r requirements-dev.txt
 python run_demo.py greenfield --auto-approve         # recorded real-model run, replayed offline
-python run_demo.py failures                          # retry, fallback, rollback, safe-stop, policy, re-plan
+python run_demo.py failures                          # 8 governance demos: retry, rollback, policy, re-plan...
 pytest -q && pytest -q -m slow                       # 243 fast tests + 8 subprocess tests
 ```
 
@@ -34,7 +34,7 @@ Leave out `--auto-approve` to make every approval decision yourself at the termi
 | `run_demo.py greenfield` | URL shortener from a written brief: 9 requirements, 12 traced tasks, 18 files, 30 generated tests passing after 2 automatic repair loops | **Recorded** from gemini-3.8-flash |
 | `run_demo.py brownfield` | Add daily click analytics to the existing app: codebase scan, grounded impact analysis with human sign-off, revision of existing code | Not yet recorded: needs `--record` (see [recording](docs/RECORDING.md)) |
 | `run_demo.py ambiguous` | "Make links safer and give marketing better insights": blocking clarifying questions, human answers, requirements re-planned | Not yet recorded: needs `--record` |
-| `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change | Scripted (no model needed) |
+| `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change, human rollback of a shipped feature, resume mid-graph from existing artifacts | Scripted (no model needed) |
 
 Details for each scenario are in [docs/SCENARIOS.md](docs/SCENARIOS.md).
 
