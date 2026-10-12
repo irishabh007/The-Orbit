@@ -19,7 +19,8 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import IO, Any, Self
 
 from warden.models import EventType
 
@@ -93,7 +94,12 @@ class VerifyResult:
 
 
 class EventLog:
-    """Thread-safe append-only log. Safe for parallel branches in one process."""
+    """Thread-safe append-only log. Safe for parallel branches in one process.
+
+    The append handle stays open between events (reopening per event dominated run
+    time on Windows); every line is still flushed before ``append`` returns. Call
+    ``close()`` (or use ``with``) to release the file; a later append reopens it.
+    """
 
     def __init__(self, path: str | Path, clock: Callable[[], str] = utc_now) -> None:
         self.path = Path(path)
@@ -102,6 +108,7 @@ class EventLog:
         self._lock = threading.Lock()
         self._last_seq = 0
         self._last_hash = GENESIS_HASH
+        self._fh: IO[str] | None = None
         for last in self._iter_raw():
             self._last_seq, self._last_hash = last.seq, last.hash
 
@@ -133,11 +140,25 @@ class EventLog:
             )
             event = dataclasses.replace(draft, hash=compute_hash(draft.hashable()))
             line = json.dumps(event.to_dict(), sort_keys=True)  # raises before any write
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-                fh.flush()
+            if self._fh is None:
+                self._fh = self.path.open("a", encoding="utf-8")
+            self._fh.write(line + "\n")
+            self._fh.flush()
             self._last_seq, self._last_hash = event.seq, event.hash
             return event
+
+    def close(self) -> None:
+        with self._lock:
+            if self._fh is not None:
+                self._fh.close()
+                self._fh = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
+                 tb: TracebackType | None) -> None:
+        self.close()
 
     # ---- reading -------------------------------------------------------
     def _iter_raw(self) -> Iterator[Event]:

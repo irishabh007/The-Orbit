@@ -101,7 +101,9 @@ doc with honest limitations. Merge Planner into Architect before cutting anythin
 - Policy secret scanning is regex-based: it catches common key formats and literal credential
   assignments, not every possible secret. Dependency checks cover `requirements*.txt` and
   `pyproject.toml` manifests, not imports in code (the AST scanner in item 5 can close that)
-- Test suite runs at about 2.1s, just over the CLAUDE.md 2s budget; the orchestrator tests dominate
+- Test suite runs at about 1.7s on the dev laptop (Windows), close to the 2s budget; per-file I/O
+  (state saves on every transition) dominates. `EventLog` keeps its append handle open, so callers
+  must `close()` it (or use `with`) when done
 - Recordings are keyed on the request only, not the model: a recording made with one Gemini model
   replays under another (the recording file names the model that produced it)
 - LLM calls are not yet in the event log (tokens, latency, backend); agents should report them

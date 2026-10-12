@@ -84,6 +84,8 @@ class Orchestrator:
         self.approver: Approver = approver or RejectAllApprover()
         self.config = config or Config()
         self._state_path = Path(state_path) if state_path else None
+        if self._state_path is not None:  # once here, not on every save (hot path)
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
         for n in graph.nodes.values():
             for name in (n.agent, n.fallback_agent):
                 if name is not None and name not in agents:
@@ -426,7 +428,6 @@ class Orchestrator:
         payload = {i: {"state": r.state.value, "attempts": r.attempts, "used_fallback": r.used_fallback,
                        "held": r.held, "committed": r.committed, "last_event": r.last_event}
                    for i, r in self._rec.items()}
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, self._state_path)

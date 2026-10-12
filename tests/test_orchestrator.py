@@ -51,6 +51,7 @@ class OrchestratorTestCase(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.store = ArtifactStore(self.root / "artifacts")
         self.log = EventLog(self.root / "events.jsonl")
+        self.addCleanup(self.log.close)  # runs before the temp dir cleanup
         self.store.put("request", "make links safer", produced_by="human:alice")
         self.calls: Counter[str] = Counter()
         self.lock = threading.Lock()

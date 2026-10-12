@@ -230,6 +230,7 @@ class OrchestratorIntegrationTests(unittest.TestCase):
         self.store = ArtifactStore(root / "artifacts")
         self.log_path = root / "events.jsonl"
         self.log = EventLog(self.log_path)
+        self.addCleanup(self.log.close)
         self.policy = YamlPolicy.from_dict(rules(
             secrets={"patterns": [{"name": "aws-access-key-id", "regex": "AKIA[0-9A-Z]{16}"}]},
             protected_paths=["Dockerfile"],

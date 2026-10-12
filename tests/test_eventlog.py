@@ -18,6 +18,7 @@ class EventLogTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.path = Path(self._tmp.name) / "runs" / "events.jsonl"
         self.log = EventLog(self.path, clock=fixed_clock)
+        self.addCleanup(self.log.close)
 
     def _seed(self, n: int = 3) -> None:
         for i in range(n):
@@ -38,6 +39,7 @@ class EventLogTests(unittest.TestCase):
 
     def test_hash_is_deterministic(self) -> None:
         other = EventLog(Path(self._tmp.name) / "other.jsonl", clock=fixed_clock)
+        self.addCleanup(other.close)
         a = self.log.append("r1", EventType.NOTE, "x", data={"k": 1})
         b = other.append("r1", EventType.NOTE, "x", data={"k": 1})
         self.assertEqual(a.hash, b.hash)
@@ -72,6 +74,7 @@ class EventLogTests(unittest.TestCase):
     def test_resumes_chain_after_restart(self) -> None:
         self._seed(2)
         reopened = EventLog(self.path, clock=fixed_clock)
+        self.addCleanup(reopened.close)
         third = reopened.append("r1", EventType.NOTE, "orchestrator")
         self.assertEqual(third.seq, 3)
         self.assertTrue(reopened.verify().ok)
@@ -114,6 +117,26 @@ class EventLogTests(unittest.TestCase):
         result = self.log.verify()
         self.assertTrue(result.ok, result.error)
         self.assertEqual(result.count, 200)
+
+    def test_every_append_is_on_disk_before_it_returns(self) -> None:
+        self.log.append("r1", EventType.NOTE, "x")
+        self.assertEqual(len(self.path.read_text("utf-8").splitlines()), 1)  # flushed, handle still open
+
+    def test_close_releases_the_file_and_append_reopens_it(self) -> None:
+        self._seed(1)
+        self.log.close()
+        moved = self.path.with_name("moved.jsonl")
+        self.path.rename(moved)  # fails on Windows while a handle is open
+        moved.rename(self.path)
+        self.log.append("r1", EventType.NOTE, "x")
+        self.assertTrue(self.log.verify().ok)
+        self.assertEqual(self.log.verify().count, 2)
+
+    def test_context_manager_closes(self) -> None:
+        other_path = Path(self._tmp.name) / "ctx.jsonl"
+        with EventLog(other_path) as log:
+            log.append("r1", EventType.NOTE, "x")
+        other_path.rename(other_path.with_name("ctx2.jsonl"))
 
 
 if __name__ == "__main__":
