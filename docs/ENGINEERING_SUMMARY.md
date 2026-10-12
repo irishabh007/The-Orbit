@@ -39,7 +39,7 @@ Two principles shaped most decisions:
 | Recorded real-model run (greenfield) | `recordings/greenfield` (12 calls, gemini-3.8-flash) |
 | Generated URL shortener (per run) | `runs/greenfield/repo`: 18 files, ~1,800 lines, 30 passing tests |
 | Per-run evidence | `runs/<scenario>/events.jsonl`, `report.md`, `metrics.json`, `spec.json`, `design.json`, `verify_report.json`, `release_review.json` |
-| Tests | `tests/`: 244 fast + 8 slow |
+| Tests | `tests/`: 257 fast + 8 slow |
 | Docs | `README.md`, `docs/` |
 
 ## Risks, trade-offs and how they are validated

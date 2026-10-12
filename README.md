@@ -17,15 +17,30 @@ python -m venv .venv && .venv/Scripts/activate      # Linux/macOS: source .venv/
 pip install -r requirements-demo.txt -r requirements-dev.txt
 python run_demo.py greenfield --auto-approve         # recorded real-model run, replayed offline
 python run_demo.py failures                          # 8 governance demos: retry, rollback, policy, re-plan...
-pytest -q && pytest -q -m slow                       # 243 fast tests + 8 subprocess tests
+pytest -q && pytest -q -m slow                       # 257 fast tests + 8 subprocess tests
 ```
 
 Each run prints a live event feed and writes `runs/<scenario>/report.md`, which includes
-reliability metrics, a Mermaid workflow diagram, a timeline, approvals, decision lineage and
-hash-chain verification. Successful scenario runs also publish `runs/<scenario>/repo`, a plain git
-repository with no dependency on Warden.
+reliability metrics, model usage and cost, a Mermaid workflow diagram, a timeline, approvals,
+decision lineage and audit verification. Successful scenario runs also publish
+`runs/<scenario>/repo`, a plain git repository with no dependency on Warden.
 
-Leave out `--auto-approve` to make every approval decision yourself at the terminal.
+Leave out `--auto-approve` to make every approval decision yourself at the terminal (press **v** at
+a gate to see what you are approving). For a guided 10-minute tour, see
+[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md).
+
+## What one run produces (recorded greenfield run, gemini-3.8-flash)
+
+| | |
+|---|---|
+| Input | A one-page brief for a URL shortener |
+| Decomposition | 9 requirements with acceptance criteria, 4 clarifying questions (2 blocking), 12 tasks traced to requirements |
+| Execution | 7 governed nodes, 14 agent attempts; developer, tester and docs in parallel |
+| Recovery | Verify failed twice (3 failing tests → 1 → 0), each time routed back to developer and tester |
+| Governance | 6 human decisions, 5 policy escalations, 0 denials; the release decision traces back to all 6 |
+| Output | 18 files (~1,800 lines): FastAPI app with SSRF protection, rate limiting, expiry, analytics; 30 passing tests; README and docs |
+| Cost | 12 model calls, ~132k input and ~77k output tokens, about $0.39 at list price |
+| Audit | Hash-chained log, verified; head hash anchored in the generated repo's git commit |
 
 ## Scenarios
 
@@ -52,6 +67,7 @@ For `--record` and `--live`, put `GEMINI_API_KEY=...` in `.env` (the file is git
 
 | Document | Contents |
 |---|---|
+| [Walkthrough](docs/WALKTHROUGH.md) | A 10-minute guided tour mapped to the evaluation criteria |
 | [Architecture](docs/ARCHITECTURE.md) | Components, orchestration model, control flow, governance, key decisions |
 | [Scenarios](docs/SCENARIOS.md) | Decomposition, orchestration and validation for each scenario |
 | [Testing](docs/TESTING.md) | Testing approach, how to run it, what each layer proves |
