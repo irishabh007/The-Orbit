@@ -60,7 +60,7 @@ class LLMRequest:
 class LLMResponse:
     text: str
     model: str
-    backend: str  # "gemini" | "replay" | "scripted"
+    backend: str  # "gemini" | "replay" | "replay-nearest" | "scripted"
     input_tokens: int | None = None
     output_tokens: int | None = None
     thinking_tokens: int | None = None  # billed as output by thinking models

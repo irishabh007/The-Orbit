@@ -9,6 +9,12 @@ to review and diff, and parallel agents never contend for one file). Modes:
 
 Only successful responses are recorded. Recordings hold the request and response,
 never credentials. Replay makes demos reproducible, not the model.
+
+*Drift.* Generated tests can be flaky, so a replayed run can see slightly different test
+output than the recording did, and an agent's repair prompt then differs by a line or two.
+On a miss, replay and auto serve the closest unused recording for the same agent (same
+system prompt, >= ``DRIFT_THRESHOLD`` of prompt lines alike) and mark the response
+``replay-nearest``. Anything less alike is still a miss.
 """
 
 from __future__ import annotations
@@ -17,6 +23,7 @@ import json
 import threading
 from collections import Counter
 from dataclasses import asdict
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Literal
 
@@ -25,6 +32,7 @@ from warden.fsutil import atomic_write
 from warden.llm.base import LLMClient, LLMReplayMiss, LLMRequest, LLMResponse
 
 Mode = Literal["replay", "record", "auto"]
+DRIFT_THRESHOLD = 0.99
 
 
 class RecordReplayClient:
@@ -41,6 +49,7 @@ class RecordReplayClient:
         self._seen: Counter[str] = Counter()
         self._lock = threading.Lock()
         self.used: set[Path] = set()  # recordings read or written this session (for pruning)
+        self.drifted: list[Path] = []  # recordings served for a prompt that differed slightly
 
     def _path(self, request: LLMRequest) -> Path:
         """The n-th identical request in this client's lifetime has its own recording.
@@ -63,17 +72,43 @@ class RecordReplayClient:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         path = self._path(request)
-        if self.mode != "record" and path.exists():
-            self._claim(request, path)
-            recorded = json.loads(path.read_text("utf-8"))["response"]
-            return LLMResponse(recorded["text"], recorded["model"], self.name, recorded.get("input_tokens"),
-                               recorded.get("output_tokens"), recorded.get("thinking_tokens"))
+        if self.mode != "record":
+            if path.exists() and path not in self.used:
+                return self._replay(request, path, self.name)
+            nearest = self._nearest(request)
+            if nearest is not None:
+                with self._lock:
+                    self.drifted.append(nearest)
+                return self._replay(request, nearest, f"{self.name}-nearest")
         if self.inner is None:
             raise LLMReplayMiss(f"no recording for request {request.key()[:12]} in {self.directory}")
         response = self.inner.complete(request)  # errors propagate, are never recorded, claim no slot
         self._write(path, request, response)
         self._claim(request, path)
         return response
+
+    def _replay(self, request: LLMRequest, path: Path, backend: str) -> LLMResponse:
+        self._claim(request, path)
+        recorded = json.loads(path.read_text("utf-8"))["response"]
+        return LLMResponse(recorded["text"], recorded["model"], backend, recorded.get("input_tokens"),
+                           recorded.get("output_tokens"), recorded.get("thinking_tokens"))
+
+    def _nearest(self, request: LLMRequest) -> Path | None:
+        """The unused recording for the same agent whose prompt is most alike, if alike enough."""
+        want = request.prompt.splitlines()
+        best, best_ratio = None, DRIFT_THRESHOLD
+        for path in sorted(self.directory.glob("*.json")):
+            with self._lock:
+                if path in self.used:
+                    continue
+            recorded = json.loads(path.read_text("utf-8"))["request"]
+            if (recorded.get("system"), recorded.get("json_mode"), recorded.get("temperature")) != (
+                    request.system, request.json_mode, request.temperature):
+                continue
+            ratio = SequenceMatcher(None, recorded.get("prompt", "").splitlines(), want, autojunk=False).ratio()
+            if ratio >= best_ratio and (best is None or ratio > best_ratio):
+                best, best_ratio = path, ratio
+        return best
 
     def prune(self) -> list[Path]:
         """Delete recordings this session did not use; call after a complete, successful run.

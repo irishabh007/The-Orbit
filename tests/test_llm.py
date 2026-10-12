@@ -177,6 +177,52 @@ class RecordReplayTests(unittest.TestCase):
             RecordReplayClient(self.dir, mode="record")
 
 
+def long_prompt(failing_test: str) -> str:
+    """A repair prompt: mostly code, plus one line of (possibly flaky) test output."""
+    return "\n".join([f"line {i} of the generated code" for i in range(300)] + [f"first: {failing_test}"])
+
+
+class ReplayDriftTests(unittest.TestCase):
+    """Generated tests can be flaky (found: a SQLite race in the .NET ambiguous run), so a
+    replayed run can see slightly different test output than the recording and send a prompt
+    that differs in a line or two. Replay then serves the closest unused recording for the same
+    agent and says so, instead of failing (replay) or paying for a new call (auto)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name) / "recordings"
+        RecordReplayClient(self.dir, ScriptedClient(["the fix"]), mode="record").complete(
+            LLMRequest(long_prompt("R1_Test"), system="tester"))
+
+    def test_a_slightly_different_prompt_replays_the_closest_recording(self) -> None:
+        replay = RecordReplayClient(self.dir, mode="replay")
+        resp = replay.complete(LLMRequest(long_prompt("R2_Test"), system="tester"))
+        self.assertEqual(resp.text, "the fix")
+        self.assertEqual(resp.backend, "replay-nearest")  # visible in the console and report
+        self.assertEqual(len(replay.drifted), 1)
+        self.assertEqual(len(replay.used), 1)  # kept by --prune
+
+    def test_auto_mode_reuses_the_closest_recording_instead_of_paying(self) -> None:
+        inner = ScriptedClient(["new answer"])
+        resp = RecordReplayClient(self.dir, inner, mode="auto").complete(
+            LLMRequest(long_prompt("R2_Test"), system="tester"))
+        self.assertEqual((resp.text, inner.calls), ("the fix", []))
+
+    def test_never_across_agents_or_for_a_really_different_prompt(self) -> None:
+        replay = RecordReplayClient(self.dir, mode="replay")
+        with self.assertRaises(LLMReplayMiss):  # another agent's answer is never substituted
+            replay.complete(LLMRequest(long_prompt("R2_Test"), system="developer"))
+        with self.assertRaises(LLMReplayMiss):
+            replay.complete(LLMRequest("a different task altogether", system="tester"))
+
+    def test_a_recording_is_served_at_most_once(self) -> None:
+        replay = RecordReplayClient(self.dir, mode="replay")
+        replay.complete(LLMRequest(long_prompt("R1_Test"), system="tester"))  # exact match
+        with self.assertRaises(LLMReplayMiss):
+            replay.complete(LLMRequest(long_prompt("R2_Test"), system="tester"))
+
+
 class GeminiClientTests(unittest.TestCase):
     def test_thinking_tokens_are_captured_and_survive_replay(self) -> None:
         body = gemini_ok("x")

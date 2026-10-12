@@ -57,7 +57,7 @@ def _gemini() -> LLMClient:
     # adapter: imported only when a real model is wanted, so replay runs without httpx
     from warden.llm.gemini import GeminiClient
 
-    return RetryingClient(GeminiClient.from_env(ROOT / ".env", timeout=300.0))
+    return RetryingClient(GeminiClient.from_env(ROOT / ".env", timeout=600.0))  # a big C# bundle can take ~300s
 
 
 class CliError(Exception):
