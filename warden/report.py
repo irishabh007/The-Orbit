@@ -152,20 +152,40 @@ def _lineage(events: Sequence[Event], seq: int) -> list[Event]:
     return [by_seq[s] for s in sorted(seen)]
 
 
+Anchor = tuple[str, int, str]  # (where it was published, e.g. a git commit; event seq; event hash)
+
+
 def render_report(events: Sequence[Event], metrics: dict[str, Any], *, graph: Graph | None = None,
-                  title: str = "Warden run report", audit: VerifyResult | None = None) -> str:
+                  title: str = "Warden run report", audit: VerifyResult | None = None,
+                  anchors: Sequence[Anchor] = ()) -> str:
     if not events:
         return f"# {title}\n\nNo events.\n"
-    t0 = _ts(events[0])
-    m = metrics
-    lines = [f"# {title}", "", "## Summary", "", "| Run | State | End-to-end latency | Agent executions | Reason |",
-             "|---|---|---|---|---|"]
-    for r in m["runs"]:
-        lines.append(f"| {r['run_id']} | {r['state']} | {_fmt(r['latency_s'], 's')} | {_fmt(r['steps'])} | "
-                     f"{_cell(r['reason'] or '-')} |")
+    sections = [
+        _summary(metrics),
+        _reliability(metrics),
+        _workflow(metrics, graph),
+        _timeline(events),
+        _approvals(metrics),
+        _policy(events),
+        _decision_lineage(events),
+        _audit(events, audit, anchors),
+    ]
+    return "\n".join([f"# {title}", "", *(line for section in sections for line in section)]) + "\n"
 
-    lines += ["", "## Reliability metrics", "", "| Metric | Value |", "|---|---|"]
-    for label, value in [
+
+def _table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> list[str]:
+    return ["| " + " | ".join(header) + " |", "|" + "---|" * len(header),
+            *("| " + " | ".join(str(c) for c in row) + " |" for row in rows)]
+
+
+def _summary(m: dict[str, Any]) -> list[str]:
+    rows = [(r["run_id"], r["state"], _fmt(r["latency_s"], "s"), _fmt(r["steps"]), _cell(r["reason"] or "-"))
+            for r in m["runs"]]
+    return ["## Summary", "", *_table(("Run", "State", "End-to-end latency", "Agent executions", "Reason"), rows)]
+
+
+def _reliability(m: dict[str, Any]) -> list[str]:
+    rows = [
         ("Run success rate", _fmt(m["run_success_rate"], "%")),
         ("Agent attempts", _fmt(m["node_attempts"])),
         ("Attempt success rate", _fmt(m["attempt_success_rate"], "%")),
@@ -178,71 +198,85 @@ def render_report(events: Sequence[Event], metrics: dict[str, Any], *, graph: Gr
         ("MTTR (first failure -> recovery)", _fmt(m["mttr_s"], "s")),
         ("Policy denials / escalations", f"{m['policy']['denied']} / {m['policy']['escalated']}"),
         ("Audit events", _fmt(m["events"])),
-    ]:
-        lines.append(f"| {label} | {value} |")
+    ]
+    return ["", "## Reliability metrics", "", *_table(("Metric", "Value"), rows)]
 
+
+def _workflow(m: dict[str, Any], graph: Graph | None) -> list[str]:
+    out = ["", "## Workflow", ""]
     if graph is not None:
         states = {n: str(info["state"]) for n, info in m["nodes"].items()}
-        lines += ["", "## Workflow", "", "Final state of every node (🔒 = human approval required).", "",
-                  "```mermaid", graph.to_mermaid(states), "```"]
+        out += ["Final state of every node (🔒 = human approval required).", "",
+                "```mermaid", graph.to_mermaid(states), "```"]
     else:
-        lines += ["", "## Workflow", "", "_Graph not supplied; see the node table below._"]
-    lines += ["", "| Node | Final state | Attempts | Failures | Last duration |", "|---|---|---|---|---|"]
-    for node, info in m["nodes"].items():
-        lines.append(f"| {node} | {info['state']} | {info['attempts']} | {info['failures']} | "
-                     f"{_fmt(info['duration_ms'], ' ms')} |")
+        out.append("_Graph not supplied; see the node table below._")
+    rows = [(node, info["state"], info["attempts"], info["failures"], _fmt(info["duration_ms"], " ms"))
+            for node, info in m["nodes"].items()]
+    return [*out, "", *_table(("Node", "Final state", "Attempts", "Failures", "Last duration"), rows)]
 
-    lines += ["", "## Timeline", "", "| t | Node | Event | Detail |", "|---|---|---|---|"]
-    for e in events:
-        row = _timeline_row(e)
-        if row:
-            lines.append(f"| +{(_ts(e) - t0).total_seconds():.1f}s | {e.node_id or '-'} | {row[0]} | "
-                         f"{_cell(row[1])} |")
 
-    lines += ["", "## Human approvals", ""]
-    if m["approvals"]:
-        lines += ["| Node | Verdict | By | Waited | Why asked | Comment |", "|---|---|---|---|---|---|"]
-        lines += [f"| {a['node']} | {a['verdict']} | {a['by']} | {_fmt(a['wait_s'], 's')} | {_cell(a['reason'])} | "
-                  f"{_cell(a['comment'] or '-')} |" for a in m["approvals"]]
-    else:
-        lines.append("No approval gates were reached.")
+def _timeline(events: Sequence[Event]) -> list[str]:
+    t0 = _ts(events[0])
+    rows = [(f"+{(_ts(e) - t0).total_seconds():.1f}s", e.node_id or "-", row[0], _cell(row[1]))
+            for e in events if (row := _timeline_row(e))]
+    return ["", "## Timeline", "", *_table(("t", "Node", "Event", "Detail"), rows)]
 
-    lines += ["", "## Policy decisions", ""]
+
+def _approvals(m: dict[str, Any]) -> list[str]:
+    if not m["approvals"]:
+        return ["", "## Human approvals", "", "No approval gates were reached."]
+    rows = [(a["node"], a["verdict"], a["by"], _fmt(a["wait_s"], "s"), _cell(a["reason"]), _cell(a["comment"] or "-"))
+            for a in m["approvals"]]
+    return ["", "## Human approvals", "", *_table(("Node", "Verdict", "By", "Waited", "Why asked", "Comment"), rows)]
+
+
+def _policy(events: Sequence[Event]) -> list[str]:
     flagged = [e for e in events if e.type == _E.POLICY_CHECK.value
                and (not e.data.get("allow", True) or e.data.get("requires_approval"))]
-    if flagged:
-        lines += ["| Node | Phase | Decision | Rule | Reason |", "|---|---|---|---|---|"]
-        lines += [f"| {e.node_id} | {e.data.get('phase')} | {'DENY' if not e.data.get('allow', True) else 'escalate'} "
-                  f"| {e.data.get('rule') or '-'} | {_cell(e.data.get('reason', ''))} |" for e in flagged]
-    else:
-        lines.append("Every policy check passed without escalation.")
+    if not flagged:
+        return ["", "## Policy decisions", "", "Every policy check passed without escalation."]
+    rows = [(e.node_id, e.data.get("phase"), "DENY" if not e.data.get("allow", True) else "escalate",
+             e.data.get("rule") or "-", _cell(e.data.get("reason", ""))) for e in flagged]
+    return ["", "## Policy decisions", "", *_table(("Node", "Phase", "Decision", "Rule", "Reason"), rows)]
 
-    lines += ["", "## Decision lineage", ""]
+
+def _decision_lineage(events: Sequence[Event]) -> list[str]:
+    out = ["", "## Decision lineage", ""]
     final = next((e for e in reversed(events) if e.type == _E.NODE_TRANSITION.value
                   and e.data.get("to") == "SUCCEEDED"), None)
     if final is None:
-        lines.append("No node succeeded, so there is no committed decision to trace.")
-    else:
-        chain = _lineage(events, final.seq)
-        humans = [e for e in chain if e.actor.startswith("human:")]
-        intro = (f"The last committed decision (event {final.seq}: `{final.node_id}` SUCCEEDED) traces back "
-                 f"through {len(chain)} causally linked events, including {len(humans)} human decision(s):")
-        lines += [intro, ""]
-        lines += [f"- event {e.seq}: {e.actor} {e.data.get('verdict', '')} on `{e.node_id}`"
-                  + (f": {_cell(e.data.get('comment'), 100)}" if e.data.get("comment") else "") for e in humans]
-        artifacts = [e.data["artifact"] for e in chain if e.type == _E.ARTIFACT_CREATED.value]
-        if artifacts:
-            lines += ["", "Artifacts in the chain: " + ", ".join(f"`{a}`" for a in artifacts)]
+        return [*out, "No node succeeded, so there is no committed decision to trace."]
+    chain = _lineage(events, final.seq)
+    humans = [e for e in chain if e.actor.startswith("human:")]
+    intro = (f"The last committed decision (event {final.seq}: `{final.node_id}` SUCCEEDED) traces back "
+             f"through {len(chain)} causally linked events, including {len(humans)} human decision(s):")
+    out += [intro, ""]
+    for e in humans:
+        comment = f": {_cell(e.data.get('comment'), 100)}" if e.data.get("comment") else ""
+        out.append(f"- event {e.seq}: {e.actor} {e.data.get('verdict', '')} on `{e.node_id}`{comment}")
+    artifacts = [e.data["artifact"] for e in chain if e.type == _E.ARTIFACT_CREATED.value]
+    if artifacts:
+        out += ["", "Artifacts in the chain: " + ", ".join(f"`{a}`" for a in artifacts)]
+    return out
 
-    lines += ["", "## Audit integrity", ""]
+
+def _audit(events: Sequence[Event], audit: VerifyResult | None, anchors: Sequence[Anchor]) -> list[str]:
+    out = ["", "## Audit integrity", ""]
     if audit is None:
-        lines.append("Chain not verified for this report.")
+        out.append("Chain not verified for this report.")
     elif audit.ok:
-        lines.append(f"Hash chain **verified**: {audit.count} events, head hash `{events[-1].hash[:16]}...`. "
-                     "Editing, deleting or reordering any event breaks verification.")
+        out.append(f"Hash chain **verified**: {audit.count} events, head hash `{events[-1].hash[:16]}...`. "
+                   "Editing, deleting or reordering any event breaks verification.")
     else:
-        lines.append(f"**Hash chain BROKEN** at event {audit.bad_seq}: {audit.error}")
-    return "\n".join(lines) + "\n"
+        out.append(f"**Hash chain BROKEN** at event {audit.bad_seq}: {audit.error}")
+    if anchors:
+        by_seq = {e.seq: e.hash for e in events}
+        mismatch = "**MISMATCH**: log differs from what was published"
+        rows = [(f"`{commit[:10]}`", seq, "matches" if by_seq.get(seq) == digest else mismatch)
+                for commit, seq, digest in anchors]
+        out += ["", ("External anchors: audit head hashes recorded in git commits. "
+                     "A rewritten log cannot reproduce them."), "", *_table(("Commit", "Event", "Result"), rows)]
+    return out
 
 
 def _timeline_row(e: Event) -> tuple[str, str] | None:
@@ -263,7 +297,7 @@ def _timeline_row(e: Event) -> tuple[str, str] | None:
 
 
 def write_report(log_path: str | Path, *, graph: Graph | None = None, title: str | None = None,
-                 out: str | Path | None = None) -> Path:
+                 out: str | Path | None = None, anchors: Sequence[Anchor] = ()) -> Path:
     """Read and verify an event log, then write ``report.md`` and ``metrics.json`` beside it."""
     log_path = Path(log_path)
     with EventLog(log_path) as log:
@@ -272,7 +306,7 @@ def write_report(log_path: str | Path, *, graph: Graph | None = None, title: str
     target = Path(out) if out else log_path.with_name("report.md")
     target.write_text(render_report(events, metrics, graph=graph, title=title or f"Warden run report: "
                                     f"{', '.join(r['run_id'] for r in metrics['runs']) or log_path.name}",
-                                    audit=audit), encoding="utf-8")
+                                    audit=audit, anchors=anchors), encoding="utf-8")
     target.with_name("metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
     return target
 

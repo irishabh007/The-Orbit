@@ -114,3 +114,12 @@ class RenderTests(ReportTestCase):
 
     def test_audit_section_reports_the_verified_chain(self) -> None:
         self.assertIn("verified", self.md.split("## Audit integrity", 1)[1])
+
+    def test_external_anchors_are_checked_against_the_log(self) -> None:
+        last = self.events[-1]
+        md = render_report(self.events, self.metrics, audit=self.log.verify(),
+                           anchors=[("abc1234def", last.seq, last.hash), ("bad9999", 2, "0" * 64)])
+        audit = md.split("## Audit integrity", 1)[1]
+        self.assertIn("abc1234", audit)
+        self.assertIn("matches", audit)
+        self.assertIn("MISMATCH", audit)

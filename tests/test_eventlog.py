@@ -1,10 +1,11 @@
+import dataclasses
 import json
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
-from warden.eventlog import GENESIS_HASH, EventLog, EventLogCorrupt
+from warden.eventlog import GENESIS_HASH, EventLog, EventLogCorrupt, compute_hash
 from warden.models import EventType
 
 
@@ -117,6 +118,31 @@ class EventLogTests(unittest.TestCase):
         result = self.log.verify()
         self.assertTrue(result.ok, result.error)
         self.assertEqual(result.count, 200)
+
+    def test_head_is_the_last_event(self) -> None:
+        self.assertEqual(self.log.head(), (0, GENESIS_HASH))
+        self._seed(2)
+        last = self.log.read_all()[-1]
+        self.assertEqual(self.log.head(), (last.seq, last.hash))
+
+    def test_external_anchor_catches_a_full_rewrite_that_verify_cannot(self) -> None:
+        self._seed(3)
+        anchor = self.log.head()
+        self.log.close()
+        # forge: change an old event and recompute every hash, so the chain is internally valid
+        forged, prev = [], GENESIS_HASH
+        for e in self.log.read_all():
+            data = {**e.data, "i": 999} if e.seq == 2 else e.data
+            draft = dataclasses.replace(e, data=data, prev_hash=prev, hash="")
+            fixed = dataclasses.replace(draft, hash=compute_hash(draft.hashable()))
+            forged.append(json.dumps(fixed.to_dict(), sort_keys=True))
+            prev = fixed.hash
+        self.path.write_text("\n".join(forged) + "\n", encoding="utf-8")
+        rewritten = EventLog(self.path)
+        self.addCleanup(rewritten.close)
+        self.assertTrue(rewritten.verify().ok)  # the chain alone cannot tell
+        self.assertFalse(rewritten.matches_anchor(*anchor))  # the external anchor can
+        self.assertTrue(self.log.matches_anchor(1, rewritten.read_all()[0].hash))  # untouched prefix still matches
 
     def test_every_append_is_on_disk_before_it_returns(self) -> None:
         self.log.append("r1", EventType.NOTE, "x")

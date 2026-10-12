@@ -11,6 +11,8 @@ from pathlib import Path
 from warden.tools.runner import Runner, run_command
 
 AUTHOR_NAME, AUTHOR_EMAIL = "Warden", "warden@localhost"
+ANCHOR_TRAILER = "Warden-Audit-Head"  # "<seq> <sha256>" of the audit log head at commit time
+_UNIT_SEP, _RECORD_SEP = "\x1f", "\x1e"
 
 
 class GitError(RuntimeError):
@@ -54,6 +56,20 @@ class GitRepo:
         """Undo one feature commit with a new commit (history is kept, as in the event log)."""
         self._git("revert", "--no-edit", sha)
         return self.head()
+
+    def audit_anchors(self) -> list[tuple[str, int, str]]:
+        """(commit, event seq, event hash) for every commit carrying an audit-head trailer."""
+        out = self._git("log", "--format=%H%x1f%B%x1e")  # unit/record separators: safe in any message
+        anchors = []
+        for record in out.split(_RECORD_SEP):
+            if _UNIT_SEP not in record:
+                continue
+            commit, body = record.strip().split(_UNIT_SEP, 1)
+            for line in body.splitlines():
+                if line.startswith(f"{ANCHOR_TRAILER}: "):
+                    seq, digest = line.split(": ", 1)[1].split()
+                    anchors.append((commit, int(seq), digest))
+        return anchors
 
     def log(self, limit: int = 20) -> list[tuple[str, str]]:
         out = self._git("log", f"-{limit}", "--format=%H%x09%s")

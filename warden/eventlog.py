@@ -192,6 +192,21 @@ class EventLog:
         return [by_seq[s] for s in sorted(seen)]
 
     # ---- integrity -----------------------------------------------------
+    def head(self) -> tuple[int, str]:
+        """(seq, hash) of the newest event: publish it somewhere external as an anchor."""
+        with self._lock:
+            return self._last_seq, self._last_hash
+
+    def matches_anchor(self, seq: int, hash_: str) -> bool:
+        """True if the chain verifies and event ``seq`` still has the anchored hash.
+
+        A full rewrite with recomputed hashes passes ``verify()``, but cannot reproduce a
+        hash that was recorded elsewhere (e.g. in a git commit) before the rewrite.
+        """
+        if not self.verify().ok:
+            return False
+        return any(e.seq == seq and e.hash == hash_ for e in self._iter_raw())
+
     def verify(self) -> VerifyResult:
         prev_hash, prev_seq, count = GENESIS_HASH, 0, 0
         try:

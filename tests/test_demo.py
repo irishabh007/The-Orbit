@@ -247,6 +247,13 @@ class PublishedRunTests(TmpCase):
         assert result.repo is not None
         self.assertTrue((result.repo / "app" / "main.py").exists())
         self.assertTrue((result.repo / "README.md").exists())
+        # the commit anchors the audit log externally, and the report checks the anchor
+        ((commit, seq, digest),) = GitRepo(result.repo).audit_anchors()
+        self.assertEqual(commit, result.commit)
+        from warden.eventlog import EventLog
+        with EventLog(result.log_path) as log:
+            self.assertTrue(log.matches_anchor(seq, digest))
+        self.assertIn("matches", (result.run_dir / "report.md").read_text("utf-8").split("## Audit integrity")[1])
 
 
 @pytest.mark.slow
