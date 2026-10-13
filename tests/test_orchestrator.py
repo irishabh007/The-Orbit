@@ -548,6 +548,35 @@ class ReplanRollbackAndSafetyTests(OrchestratorTestCase):
         self.assertEqual(recovered.states()["req"], "RUNNING")
         self.assertEqual(recovered.run().state, RunState.SUCCEEDED)
 
+    def test_human_feedback_survives_a_crash_and_resume(self) -> None:
+        # review finding: "changes requested" comments lived only in memory, so a resumed run
+        # redid the work without the human's instructions
+        seen: list[str | None] = []
+
+        def design(ctx: AgentContext) -> AgentResult:
+            seen.append(ctx.feedback)
+            return AgentResult({"design": f"design rev{len(seen)}"})
+
+        class CrashAfterComment:
+            calls = 0
+
+            def decide(self, request):  # type: ignore[no-untyped-def]
+                self.calls += 1
+                if self.calls == 1:
+                    return ApprovalDecision("changes", "alice", "add rate limits")
+                raise KeyboardInterrupt  # the process dies while the human is still deciding
+
+        agents = self.default_agents()
+        agents["design"] = FunctionAgent("design", design)
+        nodes = sdlc_nodes(design=NodeSpec("design", "design", ("req",), ("spec",), ("design",),
+                                           requires_approval=True))
+        with self.assertRaises(KeyboardInterrupt):
+            self.build(nodes, agents, approver=CrashAfterComment(), persist=True).run()
+        approver = ScriptedApprover({"design": [ApprovalDecision("approve", "alice")]})
+        resumed = self.build(nodes, agents, approver=approver, persist=True)
+        self.assertEqual(resumed.run().state, RunState.SUCCEEDED)
+        self.assertEqual(seen, [None, "add rate limits", "add rate limits"])  # last one: after resume
+
     def test_unknown_agent_is_rejected_up_front(self) -> None:
         agents = self.default_agents()
         del agents["impl"]

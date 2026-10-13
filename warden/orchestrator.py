@@ -476,7 +476,7 @@ class Orchestrator:
             return
         payload = {i: {"state": r.state.value, "attempts": r.attempts, "used_fallback": r.used_fallback,
                        "held": r.held, "committed": r.committed, "last_event": r.last_event,
-                       "replans": r.replans}
+                       "replans": r.replans, "feedback": self._feedback.get(i)}
                    for i, r in self._rec.items()}
         atomic_write(self._state_path, json.dumps(payload, indent=2, sort_keys=True))
 
@@ -489,3 +489,5 @@ class Orchestrator:
                 self._rec[nid] = NodeRecord(NodeState(d["state"]), d["attempts"], d["used_fallback"],
                                             d["held"], d["committed"], d["last_event"],
                                             d.get("replans", 0))  # absent in older state files
+                if d.get("feedback"):  # a human's "changes requested" comment survives a crash
+                    self._feedback[nid] = d["feedback"]
