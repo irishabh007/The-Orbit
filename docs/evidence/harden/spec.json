@@ -1,0 +1,111 @@
+{
+  "title": "Requirements Specification: Production Hardening for URL Shortener Concurrency and Database Migration",
+  "problem_statement": "The URL shortener service in production suffers from two critical defects: concurrent redirects cause lost click increments due to in-memory read-modify-write operations, and startup schema initialization using EnsureCreatedAsync prevents pre-existing SQLite databases from receiving new tables (such as ShortLinkDailyClicks) across software upgrades.",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "The service must atomically increment the ShortLink lifetime click counter and update the last visited timestamp directly in SQLite on every valid redirect without in-memory mutations.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active short link with ClickCount = 5, when a GET request to /{code} is processed, then the database row is updated via ExecuteUpdateAsync setting ClickCount to ClickCount + 1 and LastVisitedAt to current UTC without performing in-memory arithmetic (`link.ClickCount += 1`).",
+        "Given a non-existent or expired code, when a GET request to /{code} is processed, then no database update query is executed and HTTP 404 is returned."
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "The service must record daily analytics using a single atomic database upsert query to eliminate race conditions under concurrent redirects.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active link visited on UTC date D, when a redirect occurs and no daily record exists for that date, then an atomic SQLite INSERT ... ON CONFLICT statement creates the daily record with Clicks = 1.",
+        "Given an active link visited on UTC date D with an existing daily record having Clicks = N, when a redirect occurs, then the atomic SQLite upsert increments Clicks to N + 1 in the database row without performing in-memory arithmetic (`dailyClick.Clicks += 1`)."
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "The application startup sequence must replace EnsureCreatedAsync with EF Core migration management executing Database.MigrateAsync() against a handwritten initial migration.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given application startup on a clean environment, when the host initializes, then Database.EnsureCreatedAsync() is not called and Database.MigrateAsync() executes.",
+        "Given the absence of the dotnet-ef CLI, an initial migration class annotated with [DbContext(typeof(AppDbContext))] and [Migration(...)] defining both ShortLinks and ShortLinkDailyClicks tables successfully executes and records itself in __EFMigrationsHistory."
+      ]
+    },
+    {
+      "id": "R4",
+      "text": "The application must execute an automated legacy upgrade bootstrap prior to running migrations to support databases originally provisioned via EnsureCreatedAsync.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an existing legacy SQLite database containing ShortLinks but lacking __EFMigrationsHistory and ShortLinkDailyClicks, when the service starts up, then it runs CREATE TABLE IF NOT EXISTS for any missing tables matching the EF Core model, creates __EFMigrationsHistory if absent, inserts the initial migration identifier into __EFMigrationsHistory as applied, and successfully completes Database.MigrateAsync().",
+        "Given an upgraded legacy database, when subsequent migrations are applied in future runs, then EF Core recognizes the initial schema state without re-creating existing tables."
+      ]
+    },
+    {
+      "id": "R5",
+      "text": "The test suite must verify that parallel redirects executed concurrently record every click accurately without lost updates.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given an active short link, when 100 concurrent GET /{code} requests are issued in parallel, then all requests receive HTTP 307 redirects, the ShortLink.ClickCount in the database equals exactly 100, and the ShortLinkDailyClicks.Clicks for the current UTC date equals exactly 100."
+      ]
+    },
+    {
+      "id": "R6",
+      "text": "The test suite must verify that a database created under the initial release schema successfully upgrades without data loss or downtime.",
+      "category": "reliability",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given a legacy SQLite database populated only with the initial ShortLinks schema and containing one pre-existing link with ClickCount = 42, when the application starts against this database, then the application boots successfully, GET /{code} returns HTTP 307 and increments ClickCount to 43, and GET /analytics/{code}/daily returns HTTP 200 with recorded daily clicks."
+      ]
+    },
+    {
+      "id": "R7",
+      "text": "All endpoints must maintain existing API contracts, status codes, response payloads, and rate-limiting behaviors.",
+      "category": "functional",
+      "priority": "must",
+      "acceptance_criteria": [
+        "Given existing automated regression tests across shorten, redirect, base analytics, daily analytics, and health endpoints, when executed after the atomic counter and migration changes, then 100% of the tests pass without modification to expected status codes or JSON schemas."
+      ]
+    },
+    {
+      "id": "R8",
+      "text": "Technical documentation and architectural design records must be updated to reflect atomic updates, migration workflows, and legacy upgrade procedures.",
+      "category": "usability",
+      "priority": "should",
+      "acceptance_criteria": [
+        "Given repository documentation describing click counting and persistence, then all sections describing in-memory updates or EnsureCreated are updated to document the atomic ExecuteUpdateAsync / upsert mechanism, EF Core migrations, and the legacy __EFMigrationsHistory bootstrap process."
+      ]
+    }
+  ],
+  "assumptions": [
+    "SQLite is the production and testing database engine, supporting `INSERT INTO ... ON CONFLICT(...) DO UPDATE` syntax.",
+    "The conflict target for `ShortLinkDailyClicks` is the composite unique constraint on `(ShortLinkId, Date)` (or `(LinkId, Date)`).",
+    "When atomically incrementing `ShortLink.ClickCount`, `LastVisitedAt` must also be updated to the current UTC timestamp as part of the same `ExecuteUpdateAsync` call.",
+    "Existing endpoints (`POST /shorten`, `GET /{code}`, `GET /analytics/{code}`, `GET /analytics/{code}/daily`, `GET /health`) require no schema or route changes.",
+    "Database file corruption recovery and file-level SQLite backup mechanisms before startup migration are handled externally by infrastructure/operational tooling."
+  ],
+  "open_questions": [
+    {
+      "id": "Q1",
+      "question": "What is the exact column definition and unique index name for the conflict target on ShortLinkDailyClicks in AppDbContext (e.g., ShortLinkId and Date)?",
+      "why_it_matters": "The SQLite ON CONFLICT clause requires explicit target columns or index names; a mismatch will cause runtime SQL syntax errors during redirect upserts.",
+      "blocking": true,
+      "proposed_default": "Target the composite unique index on `(ShortLinkId, Date)` matching the EF Core entity model definition."
+    },
+    {
+      "id": "Q2",
+      "question": "Should legacy database bootstrapping run within an explicit transaction to prevent half-initialized migration history states if the host crashes during upgrade?",
+      "why_it_matters": "A crash between table creation and inserting the __EFMigrationsHistory row could leave the database in an inconsistent state.",
+      "blocking": false,
+      "proposed_default": "Wrap the `CREATE TABLE IF NOT EXISTS` and `__EFMigrationsHistory` seeding logic in an explicit SQLite transaction prior to calling `Database.MigrateAsync()`."
+    }
+  ],
+  "out_of_scope": [
+    "Migrating database providers from SQLite to PostgreSQL, MySQL, or SQL Server.",
+    "Modifying public REST API schemas or response contracts for any endpoint.",
+    "Installing or relying on the `dotnet ef` CLI tool in CI/CD or runtime environments.",
+    "Automated retrofitting or backfilling of historical daily click logs prior to the date each link was first visited after the daily analytics release."
+  ]
+}

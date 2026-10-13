@@ -1,0 +1,305 @@
+{
+  "overview": "Production hardening of the SQLite-backed URL shortener service to eliminate race conditions during concurrent redirects and establish reliable schema evolution. Atomic counter and timestamp updates are performed directly in SQLite using EF Core ExecuteUpdateAsync and atomic raw SQL upserts (INSERT ... ON CONFLICT). Startup initialization is upgraded from EnsureCreatedAsync to EF Core migrations with an automated legacy bootstrap routine that inspects existing tables, creates missing structures, and registers the initial migration in __EFMigrationsHistory within an explicit transaction prior to Database.MigrateAsync().",
+  "components": [
+    {
+      "name": "InitialCreateMigration",
+      "responsibility": "Provides the handwritten EF Core initial migration defining ShortLinks and ShortLinkDailyClicks tables along with indices, annotated with [DbContext(typeof(AppDbContext))] and [Migration(\"20260101000000_InitialCreate\")].",
+      "module": "src/App/Data/Migrations/InitialCreate.cs"
+    },
+    {
+      "name": "DatabaseBootstrapper",
+      "responsibility": "Executes legacy database schema bootstrap: checks for legacy SQLite tables, creates missing tables (ShortLinkDailyClicks) if absent, initializes __EFMigrationsHistory if missing, and records the initial migration within an explicit transaction before executing Database.MigrateAsync().",
+      "module": "src/App/Data/DatabaseBootstrapper.cs"
+    },
+    {
+      "name": "AppDbContext",
+      "responsibility": "Configures EF Core entity mappings, indices (such as composite unique index on ShortLinkDailyClicks(ShortLinkId, Date)), and database options.",
+      "module": "src/App/Data/AppDbContext.cs"
+    },
+    {
+      "name": "LinkService",
+      "responsibility": "Implements URL redirection and analytics logic, utilizing ExecuteUpdateAsync for atomic lifetime click counting and SQLite raw SQL upsert (INSERT ... ON CONFLICT) for atomic daily click increments without in-memory mutations.",
+      "module": "src/App/Services/LinkService.cs"
+    },
+    {
+      "name": "Program",
+      "responsibility": "Bootstraps web host configuration, runs DatabaseBootstrapper on startup instead of EnsureCreatedAsync, registers minimal API endpoints, and exports public partial class Program.",
+      "module": "src/App/Program.cs"
+    },
+    {
+      "name": "LinkEndpoints",
+      "responsibility": "Exposes HTTP routes for shortening, redirection, lifetime analytics, daily analytics, and health status.",
+      "module": "src/App/Endpoints/LinkEndpoints.cs"
+    },
+    {
+      "name": "RedirectEndpointTests",
+      "responsibility": "Tests redirect HTTP semantics, atomic click counting, expiration validation, and 100-request parallel redirect concurrency behavior.",
+      "module": "tests/RedirectEndpointTests.cs"
+    },
+    {
+      "name": "RateLimitingAndPersistenceTests",
+      "responsibility": "Tests rate limiting policies, database persistence across host restarts, and legacy database schema bootstrap upgrade without data loss.",
+      "module": "tests/RateLimitingAndPersistenceTests.cs"
+    }
+  ],
+  "api": [
+    {
+      "method": "POST",
+      "path": "/shorten",
+      "summary": "Create a new shortened link with an optional custom alias and expiration time.",
+      "status_codes": [
+        201,
+        400,
+        409,
+        429
+      ],
+      "requirement_ids": [
+        "R7"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/{code}",
+      "summary": "Redirect to the target URL for an active link, atomically incrementing lifetime and daily click counts.",
+      "status_codes": [
+        307,
+        404
+      ],
+      "requirement_ids": [
+        "R1",
+        "R2",
+        "R5",
+        "R7"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/{code}",
+      "summary": "Retrieve lifetime analytics including total clicks, created date, and last visited timestamp.",
+      "status_codes": [
+        200,
+        404
+      ],
+      "requirement_ids": [
+        "R7"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/{code}/daily",
+      "summary": "Retrieve zero-filled daily click counts for an active link across the requested time window.",
+      "status_codes": [
+        200,
+        400,
+        404
+      ],
+      "requirement_ids": [
+        "R2",
+        "R6",
+        "R7"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "summary": "Health check endpoint verifying application and database connectivity.",
+      "status_codes": [
+        200,
+        503
+      ],
+      "requirement_ids": [
+        "R7"
+      ]
+    }
+  ],
+  "data_model": [
+    {
+      "name": "ShortLink",
+      "fields": [
+        "long Id (Primary Key)",
+        "string Code (Unique Index)",
+        "string OriginalUrl",
+        "long ClickCount",
+        "DateTime CreatedAtUtc",
+        "DateTime? LastVisitedAtUtc",
+        "DateTime? ExpiresAtUtc"
+      ]
+    },
+    {
+      "name": "ShortLinkDailyClick",
+      "fields": [
+        "long Id (Primary Key)",
+        "long ShortLinkId (Foreign Key -> ShortLink.Id)",
+        "DateOnly Date",
+        "long Clicks",
+        "Unique Index on (ShortLinkId, Date)"
+      ]
+    },
+    {
+      "name": "__EFMigrationsHistory",
+      "fields": [
+        "string MigrationId (Primary Key)",
+        "string ProductVersion"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "title": "Atomic Lifetime Click Increment via ExecuteUpdateAsync",
+      "choice": "Use EF Core's SetProperty ExecuteUpdateAsync on ShortLinks matching Id to increment ClickCount (s => s.ClickCount + 1) and set LastVisitedAtUtc directly in SQLite.",
+      "rationale": "Prevents lost updates caused by concurrent in-memory read-modify-write operations while keeping EF Core change tracking clean and minimal.",
+      "alternatives": [
+        "Read-modify-write with EF Core optimistic concurrency tokens (RowVersion/ConcurrencyCheck), rejected because concurrent updates would throw exceptions and fail redirects.",
+        "Raw SQL UPDATE statement, rejected because ExecuteUpdateAsync provides type safety and translates directly to an atomic SQLite UPDATE."
+      ]
+    },
+    {
+      "id": "D2",
+      "title": "Atomic Daily Analytics Upsert via Raw SQLite ON CONFLICT",
+      "choice": "Execute a raw SQL query `INSERT INTO ShortLinkDailyClicks (ShortLinkId, Date, Clicks) VALUES (@linkId, @date, 1) ON CONFLICT(ShortLinkId, Date) DO UPDATE SET Clicks = ShortLinkDailyClicks.Clicks + 1` via Database.ExecuteSqlInterpolatedAsync.",
+      "rationale": "SQLite natively supports ON CONFLICT clauses; a single atomic query guarantees no race conditions or duplicate key violations under high concurrency without requiring in-memory locking.",
+      "alternatives": [
+        "Query first, then insert or update in C#, rejected due to inherent race conditions under concurrent requests.",
+        "Application-level SemaphoreSlim locking on link ID, rejected because it does not scale across instances and adds significant latency."
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "Handcrafted Initial EF Core Migration without dotnet-ef CLI",
+      "choice": "Author InitialCreate.cs inheriting from Migration with custom [DbContext] and [Migration] attributes defining ShortLinks, ShortLinkDailyClicks, and their indices.",
+      "rationale": "The build and runtime environments do not require the dotnet-ef CLI to be installed, yet EF Core can discover and apply the migration via Database.MigrateAsync().",
+      "alternatives": [
+        "Requiring dotnet-ef CLI in CI/CD pipeline, rejected because dotnet-ef is not guaranteed in target runtime containers.",
+        "Retaining EnsureCreatedAsync, rejected because EnsureCreatedAsync does not support incremental migrations or pre-existing databases."
+      ]
+    },
+    {
+      "id": "D4",
+      "title": "Transactional Legacy Database Schema Bootstrap",
+      "choice": "Prior to calling Database.MigrateAsync(), execute an explicit transaction checking sqlite_master for legacy tables, creating missing tables with CREATE TABLE IF NOT EXISTS, ensuring __EFMigrationsHistory exists, and seeding the initial migration ID.",
+      "rationale": "Prevents MigrateAsync from failing with 'table already exists' on legacy SQLite databases created with EnsureCreatedAsync, while guaranteeing atomicity if startup is interrupted.",
+      "alternatives": [
+        "Running Database.MigrateAsync() directly and catching SQLite exceptions, rejected because partial migration failures leave the database corrupted.",
+        "Manual offline migration scripts, rejected because the service must self-heal and upgrade seamlessly upon startup."
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Author handwritten initial EF Core migration for ShortLinks and ShortLinkDailyClicks",
+      "owner": "developer",
+      "requirement_ids": [
+        "R3"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T2",
+      "title": "Implement transactional legacy database bootstrapper in src/App/Data/DatabaseBootstrapper.cs",
+      "owner": "developer",
+      "requirement_ids": [
+        "R3",
+        "R4"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Integrate database bootstrapper and MigrateAsync into Program.cs startup sequence",
+      "owner": "developer",
+      "requirement_ids": [
+        "R3",
+        "R4"
+      ],
+      "depends_on": [
+        "T2"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Implement atomic lifetime click increment in LinkService.GetRedirectAsync using ExecuteUpdateAsync",
+      "owner": "developer",
+      "requirement_ids": [
+        "R1"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Implement atomic daily analytics upsert in LinkService.GetRedirectAsync using SQLite ON CONFLICT",
+      "owner": "developer",
+      "requirement_ids": [
+        "R2"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Add parallel concurrency redirect test with 100 concurrent requests in RedirectEndpointTests.cs",
+      "owner": "tester",
+      "requirement_ids": [
+        "R5"
+      ],
+      "depends_on": [
+        "T4",
+        "T5"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Add legacy schema bootstrap upgrade and data preservation test in RateLimitingAndPersistenceTests.cs",
+      "owner": "tester",
+      "requirement_ids": [
+        "R4",
+        "R6"
+      ],
+      "depends_on": [
+        "T2",
+        "T3"
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Execute full test suite and verify 100% regression compatibility across all endpoints",
+      "owner": "tester",
+      "requirement_ids": [
+        "R7"
+      ],
+      "depends_on": [
+        "T6",
+        "T7"
+      ]
+    },
+    {
+      "id": "T9",
+      "title": "Update architectural documentation and operational guides for atomic persistence and migrations",
+      "owner": "docs",
+      "requirement_ids": [
+        "R8"
+      ],
+      "depends_on": [
+        "T3",
+        "T4",
+        "T5"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "SQLite database locked / busy errors under 100 concurrent parallel redirect writes.",
+      "mitigation": "Configure SQLite connection string with Write-Ahead Logging (WAL) and an adequate busy timeout (e.g., 'Data Source=...;Mode=ReadWriteCreate;Cache=Shared;Default Timeout=30') to serialize atomic writes efficiently."
+    },
+    {
+      "risk": "Partial legacy database bootstrapping leaving inconsistent migration metadata upon host crash.",
+      "mitigation": "Wrap the legacy bootstrap DDL statements and __EFMigrationsHistory insert inside a single SQLite transaction before invoking Database.MigrateAsync()."
+    }
+  ]
+}

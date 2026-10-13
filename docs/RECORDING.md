@@ -58,6 +58,7 @@ Then run steps 2-6 above for each scenario, and commit `recordings/` plus
 | greenfield (.NET) | Yes (14 calls) | SUCCEEDED: 31/31 tests, released |
 | brownfield (.NET) | Yes (10 calls), on the greenfield baseline | SUCCEEDED: 50/50 tests, released |
 | ambiguous (.NET) | Yes (23 calls) | FAILED: 6-loop repair budget spent, nothing released (kept as recorded) |
+| harden (.NET) | Yes (19 calls), on the brownfield output, with the consistency review | SUCCEEDED: 52/52 tests; review caught 2 defects, fixed; released |
 | greenfield-python | Yes (12 calls) | SUCCEEDED: 30 tests, released |
 | failures | Not needed (scripted) | 8 demos |
 | new | Recorded automatically to `recordings/<project>/` whenever you run it with a key | |

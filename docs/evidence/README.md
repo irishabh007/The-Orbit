@@ -1,4 +1,4 @@
-# Evidence: three recorded .NET runs
+# Evidence: four recorded .NET runs
 
 Unedited output of the recorded runs, copied from `runs/<scenario>/`. The model was
 gemini-3.8-flash and the product stack is ASP.NET Core minimal APIs, EF Core + SQLite and xUnit.
@@ -6,17 +6,17 @@ Approvals were granted with `--auto-approve` (demo mode). Everything here can be
 offline from `recordings/`:
 
 ```bash
-python run_demo.py greenfield --auto-approve   # likewise brownfield, ambiguous
+python run_demo.py greenfield --auto-approve   # likewise brownfield, ambiguous, harden
 ```
 
-| | [greenfield](greenfield/) | [brownfield](brownfield/) | [ambiguous](ambiguous/) |
-|---|---|---|---|
-| Request | URL shortener from a written brief | Daily click analytics on the existing app | "Make links safer and give marketing better insights" |
-| Outcome | **SUCCEEDED**: 31/31 tests, released | **SUCCEEDED**: released | **FAILED** safely: repair budget spent, nothing released |
-| Verify, attempt by attempt | 3 → 3 → 27 → 30 → 31 of 31 | build error → pass | build error → 1 → build error → 1 → 18 → build error → 0 of 26 |
-| Repair loops (budget) | 4 (4) | 1 (4) | 6 (6) |
-| Model calls / cost of the recorded path | 14 / $1.12 | 10 / $0.58 | 23 / $1.78 |
-| Audit events (chain verified) | 190 ✓, anchored in the commit | 113 ✓, anchored in the commit | 257 ✓ |
+| | [greenfield](greenfield/) | [brownfield](brownfield/) | [ambiguous](ambiguous/) | [harden](harden/) |
+|---|---|---|---|---|
+| Request | URL shortener from a written brief | Daily click analytics on the existing app | "Make links safer and give marketing better insights" | Fix two production defects a reviewer found (lost counts, no migration) |
+| Outcome | **SUCCEEDED**: 31/31 tests, released | **SUCCEEDED**: released | **FAILED** safely: repair budget spent, nothing released | **SUCCEEDED**: 52/52 tests, review clean, released |
+| Verify, attempt by attempt | 3 → 3 → 27 → 30 → 31 of 31 | build error → pass | build error → 1 → build error → 1 → 18 → build error → 0 of 26 | build error → 49 → 52 of 52; then the consistency review sent back 2 findings → 52 of 52, review clean |
+| Repair loops (budget) | 4 (4) | 1 (4) | 6 (6) | 2 verify (4) + 1 review (2) |
+| Model calls / cost of the recorded path | 14 / $1.12 | 10 / $0.58 | 23 / $1.78 | 19 / $1.74 |
+| Audit events (chain verified) | 190 ✓, anchored in the commit | 113 ✓, anchored in the commit | 257 ✓ | 220 ✓, anchored in the commit |
 
 Costs are computed from the token counts in the recordings (`warden/llm/pricing.py`). They
 cover the recorded path only, not abandoned recording attempts. Greenfield's MTTR in `metrics.json`
@@ -39,9 +39,10 @@ cover the recorded path only, not abandoned recording attempts. Greenfield's MTT
 - **`commit-message.txt`**: the generated repo's commit. It lists the approvals and ends with
   `Warden-Audit-Head: <seq> <hash>`, which ties the code to the exact audit-log state.
 
-## Known issues in this output (found by an external review)
+## Known issues in the first three runs, fixed in `harden`
 
-The generated code is kept exactly as produced, including two problems Warden did not catch:
+The generated code is kept exactly as produced, including two problems Warden did not catch at the
+time (the consistency review did not exist yet):
 
 - `greenfield/repo/docs/architecture.md` says click counters update atomically, but
   `src/App/Services/LinkService.cs` increments with a read-then-write (`ClickCount += 1`), which can
@@ -51,7 +52,9 @@ The generated code is kept exactly as produced, including two problems Warden di
   `EnsureCreatedAsync()`, which does not add tables to an existing database. The tests start from
   fresh databases, so they pass (see [change.diff](brownfield/change.diff)).
 
-Why they got through, and the planned fix, are in
+Both are fixed by Warden itself in [harden/](harden/): atomic counters, an EF Core migration with
+an upgrade path, a concurrency test and a legacy-database upgrade test, 52/52 passing, with the new
+consistency review catching two leftovers the tests had missed. Details:
 [ENGINEERING_SUMMARY.md](../ENGINEERING_SUMMARY.md#external-review-findings-and-responses).
 
 ## Check the audit trail yourself

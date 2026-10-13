@@ -1,0 +1,427 @@
+{
+  "dependents": {
+    "src/App/Data/AppDbContext.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs",
+      "src/App/Services/LinkService.cs"
+    ],
+    "src/App/Data/ShortLink.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs",
+      "src/App/Services/LinkService.cs"
+    ],
+    "src/App/Data/ShortLinkDailyClick.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs",
+      "src/App/Services/LinkService.cs"
+    ],
+    "src/App/Endpoints/LinkEndpoints.cs": [
+      "src/App/Program.cs"
+    ],
+    "src/App/Middleware/RateLimitingConfiguration.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs"
+    ],
+    "src/App/Models/Contracts.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Middleware/RateLimitingConfiguration.cs",
+      "src/App/Program.cs",
+      "src/App/Services/LinkService.cs"
+    ],
+    "src/App/Program.cs": [],
+    "src/App/Services/CodeGeneratorService.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs"
+    ],
+    "src/App/Services/LinkService.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs"
+    ],
+    "src/App/Services/UrlValidationService.cs": [
+      "src/App/Endpoints/LinkEndpoints.cs",
+      "src/App/Program.cs"
+    ]
+  },
+  "endpoints": [
+    {
+      "handler": "minimal-api",
+      "method": "GET",
+      "module": "src/App/Endpoints/LinkEndpoints.cs",
+      "path": "/analytics/{code}"
+    },
+    {
+      "handler": "minimal-api",
+      "method": "GET",
+      "module": "src/App/Endpoints/LinkEndpoints.cs",
+      "path": "/analytics/{code}/daily"
+    },
+    {
+      "handler": "minimal-api",
+      "method": "GET",
+      "module": "src/App/Endpoints/LinkEndpoints.cs",
+      "path": "/health"
+    },
+    {
+      "handler": "minimal-api",
+      "method": "POST",
+      "module": "src/App/Endpoints/LinkEndpoints.cs",
+      "path": "/shorten"
+    },
+    {
+      "handler": "minimal-api",
+      "method": "GET",
+      "module": "src/App/Endpoints/LinkEndpoints.cs",
+      "path": "/{code}"
+    }
+  ],
+  "modules": [
+    {
+      "classes": [
+        "AppDbContext"
+      ],
+      "functions": [],
+      "imports_external": [
+        "Microsoft.EntityFrameworkCore",
+        "Microsoft.EntityFrameworkCore.Storage.ValueConversion"
+      ],
+      "imports_internal": [],
+      "lines": 82,
+      "path": "src/App/Data/AppDbContext.cs"
+    },
+    {
+      "classes": [
+        "ShortLink"
+      ],
+      "functions": [],
+      "imports_external": [],
+      "imports_internal": [],
+      "lines": 13,
+      "path": "src/App/Data/ShortLink.cs"
+    },
+    {
+      "classes": [
+        "ShortLinkDailyClick"
+      ],
+      "functions": [],
+      "imports_external": [],
+      "imports_internal": [],
+      "lines": 10,
+      "path": "src/App/Data/ShortLinkDailyClick.cs"
+    },
+    {
+      "classes": [
+        "LinkEndpoints"
+      ],
+      "functions": [
+        "MapLinkEndpoints"
+      ],
+      "imports_external": [
+        "Microsoft.EntityFrameworkCore"
+      ],
+      "imports_internal": [
+        "src/App/Data/AppDbContext.cs",
+        "src/App/Data/ShortLink.cs",
+        "src/App/Data/ShortLinkDailyClick.cs",
+        "src/App/Middleware/RateLimitingConfiguration.cs",
+        "src/App/Models/Contracts.cs",
+        "src/App/Services/CodeGeneratorService.cs",
+        "src/App/Services/LinkService.cs",
+        "src/App/Services/UrlValidationService.cs"
+      ],
+      "lines": 107,
+      "path": "src/App/Endpoints/LinkEndpoints.cs"
+    },
+    {
+      "classes": [
+        "RateLimitingConfiguration"
+      ],
+      "functions": [
+        "AddShortenRateLimiter",
+        "ResolveClientIp"
+      ],
+      "imports_external": [
+        "Microsoft.AspNetCore.RateLimiting",
+        "System.Threading.RateLimiting"
+      ],
+      "imports_internal": [
+        "src/App/Models/Contracts.cs"
+      ],
+      "lines": 81,
+      "path": "src/App/Middleware/RateLimitingConfiguration.cs"
+    },
+    {
+      "classes": [
+        "AnalyticsResponse",
+        "DailyAnalyticsResponse",
+        "DailyClickRecord",
+        "ErrorResponse",
+        "HealthResponse",
+        "ShortenRequest",
+        "ShortenResponse"
+      ],
+      "functions": [],
+      "imports_external": [
+        "System.Text.Json.Serialization"
+      ],
+      "imports_internal": [],
+      "lines": 51,
+      "path": "src/App/Models/Contracts.cs"
+    },
+    {
+      "classes": [
+        "Program"
+      ],
+      "functions": [],
+      "imports_external": [
+        "Microsoft.EntityFrameworkCore"
+      ],
+      "imports_internal": [
+        "src/App/Data/AppDbContext.cs",
+        "src/App/Data/ShortLink.cs",
+        "src/App/Data/ShortLinkDailyClick.cs",
+        "src/App/Endpoints/LinkEndpoints.cs",
+        "src/App/Middleware/RateLimitingConfiguration.cs",
+        "src/App/Services/CodeGeneratorService.cs",
+        "src/App/Services/LinkService.cs",
+        "src/App/Services/UrlValidationService.cs"
+      ],
+      "lines": 66,
+      "path": "src/App/Program.cs"
+    },
+    {
+      "classes": [
+        "CodeGeneratorService",
+        "ICodeGeneratorService"
+      ],
+      "functions": [
+        "GenerateCode"
+      ],
+      "imports_external": [
+        "System.Security.Cryptography",
+        "System.Text.RegularExpressions"
+      ],
+      "imports_internal": [],
+      "lines": 46,
+      "path": "src/App/Services/CodeGeneratorService.cs"
+    },
+    {
+      "classes": [
+        "AnalyticsResult",
+        "DailyAnalyticsResult",
+        "DailyAnalyticsStatus",
+        "ILinkService",
+        "LinkService",
+        "RedirectResult",
+        "RedirectStatus",
+        "ShortenResult",
+        "ShortenStatus"
+      ],
+      "functions": [
+        "CreateShortLinkAsync",
+        "GetAnalyticsAsync",
+        "GetDailyAnalyticsAsync",
+        "GetRedirectAsync"
+      ],
+      "imports_external": [
+        "Microsoft.EntityFrameworkCore"
+      ],
+      "imports_internal": [
+        "src/App/Data/AppDbContext.cs",
+        "src/App/Data/ShortLink.cs",
+        "src/App/Data/ShortLinkDailyClick.cs",
+        "src/App/Models/Contracts.cs"
+      ],
+      "lines": 306,
+      "path": "src/App/Services/LinkService.cs"
+    },
+    {
+      "classes": [
+        "IUrlValidationService",
+        "UrlValidationService"
+      ],
+      "functions": [
+        "IsPrivateOrRestricted"
+      ],
+      "imports_external": [
+        "System.Net",
+        "System.Net.Sockets"
+      ],
+      "imports_internal": [],
+      "lines": 135,
+      "path": "src/App/Services/UrlValidationService.cs"
+    },
+    {
+      "classes": [
+        "AnalyticsAndHealthTests"
+      ],
+      "functions": [
+        "R1_DailyAnalytics_CustomDays14_ReturnsFourteenConsecutiveDays",
+        "R1_DailyAnalytics_DefaultDays_ReturnsSevenConsecutiveDaysEndingToday",
+        "R1_DailyAnalytics_InvalidDays_ReturnsBadRequest400",
+        "R2_DailyAnalytics_RecordedClicks_MatchesCountForDateAndZeroForOtherDays",
+        "R2_DailyAnalytics_ZeroFilledDays_ReturnsConsecutiveDatesWithZeroClicks",
+        "R3_DailyAnalytics_ExpiredCode_ReturnsNotFound404MatchingBaseAnalytics",
+        "R3_DailyAnalytics_NonExistentCode_ReturnsNotFound404MatchingBaseAnalytics",
+        "R5_Analytics_AfterVisit_ReturnsUpdatedClicksAndLastVisitedTimestamp",
+        "R5_Analytics_NewLink_ReturnsZeroClicksAndNullLastVisited",
+        "R5_Analytics_NonExistentCode_ReturnsNotFound404",
+        "R6_DailyAnalytics_MaxDays90_ReturnsNinetyRecordsUnderFiftyMilliseconds",
+        "R6_Health_WhenDatastoreUnavailable_ReturnsServiceUnavailable503",
+        "R6_Health_WhenOperational_ReturnsOk200",
+        "R7_DailyAnalytics_SqlInjectionOrMalformedPayloads_RejectsWith400Or404WithoutStackTrace"
+      ],
+      "imports_external": [
+        "System",
+        "System.Collections.Generic",
+        "System.IO",
+        "System.Net",
+        "System.Text.Json",
+        "System.Threading.Tasks",
+        "Xunit"
+      ],
+      "imports_internal": [],
+      "lines": 370,
+      "path": "tests/AnalyticsAndHealthTests.cs"
+    },
+    {
+      "classes": [],
+      "functions": [],
+      "imports_external": [
+        "Xunit"
+      ],
+      "imports_internal": [],
+      "lines": 3,
+      "path": "tests/AssemblyInfo.cs"
+    },
+    {
+      "classes": [
+        "CustomWebApplicationFactory"
+      ],
+      "functions": [
+        "CreateNoRedirectClient"
+      ],
+      "imports_external": [
+        "Microsoft.AspNetCore.Hosting",
+        "Microsoft.AspNetCore.Mvc.Testing",
+        "Microsoft.Extensions.Configuration",
+        "System",
+        "System.Collections.Generic",
+        "System.IO",
+        "System.Net.Http"
+      ],
+      "imports_internal": [],
+      "lines": 92,
+      "path": "tests/CustomWebApplicationFactory.cs"
+    },
+    {
+      "classes": [
+        "JsonTestHelper"
+      ],
+      "functions": [
+        "CreateJsonContent",
+        "GetArrayProperty",
+        "GetInt64Property",
+        "GetStringProperty",
+        "PropertyIsNull"
+      ],
+      "imports_external": [
+        "System",
+        "System.Collections.Generic",
+        "System.Net.Http",
+        "System.Text",
+        "System.Text.Json"
+      ],
+      "imports_internal": [],
+      "lines": 125,
+      "path": "tests/JsonTestHelper.cs"
+    },
+    {
+      "classes": [
+        "RateLimitingAndPersistenceTests"
+      ],
+      "functions": [
+        "R5_Persistence_SurvivesServiceRestartAndPreservesPriorLinks",
+        "R8_RateLimiting_ExceedingThreshold_ReturnsTooManyRequests429WithRetryAfter",
+        "R8_RateLimiting_WithinThreshold_ReturnsCreated201"
+      ],
+      "imports_external": [
+        "System",
+        "System.Collections.Generic",
+        "System.IO",
+        "System.Net",
+        "System.Text.Json",
+        "System.Threading.Tasks",
+        "Xunit"
+      ],
+      "imports_internal": [],
+      "lines": 124,
+      "path": "tests/RateLimitingAndPersistenceTests.cs"
+    },
+    {
+      "classes": [
+        "RedirectEndpointTests"
+      ],
+      "functions": [
+        "R3_Redirect_ActiveCode_Returns307TemporaryRedirectWithLocation",
+        "R3_Redirect_IncrementsClickCountAndUpdatesLastVisitedAt",
+        "R3_Redirect_NonExistentCode_ReturnsNotFound404",
+        "R4_Redirect_ActiveLink_IncrementsLifetimeAndDailyClickCount",
+        "R4_Redirect_ExpiredLink_ReturnsNotFound404AndDoesNotIncrementClicks",
+        "R4_Redirect_ExpiredOrNonExistentLink_DoesNotCreateOrIncrementDailyClicks",
+        "R4_Shorten_WithExpiration_StoresExpirationTimestamp"
+      ],
+      "imports_external": [
+        "System",
+        "System.Collections.Generic",
+        "System.Net",
+        "System.Text.Json",
+        "System.Threading.Tasks",
+        "Xunit"
+      ],
+      "imports_internal": [],
+      "lines": 217,
+      "path": "tests/RedirectEndpointTests.cs"
+    },
+    {
+      "classes": [
+        "ShortenEndpointTests"
+      ],
+      "functions": [
+        "R1_Shorten_DifferentUrls_ReceiveDistinctGeneratedCodes",
+        "R1_Shorten_ReturnsCreatedWithCode",
+        "R2_Shorten_DuplicateCustomAlias_ReturnsConflict409",
+        "R2_Shorten_WithCustomAlias_ReturnsCreatedWithSpecifiedCode",
+        "R7_Shorten_DomainResolvingToPrivateIp_ReturnsBadRequest400",
+        "R7_Shorten_NonHttpScheme_ReturnsBadRequest400",
+        "R7_Shorten_PrivateOrLoopbackIp_ReturnsBadRequest400"
+      ],
+      "imports_external": [
+        "System",
+        "System.Collections.Generic",
+        "System.Net",
+        "System.Text.Json",
+        "System.Threading.Tasks",
+        "Xunit"
+      ],
+      "imports_internal": [],
+      "lines": 166,
+      "path": "tests/ShortenEndpointTests.cs"
+    }
+  ],
+  "other_files": [
+    "src/App/App.csproj",
+    "src/App/appsettings.Development.json",
+    "src/App/appsettings.json",
+    "tests/Tests.csproj"
+  ],
+  "parse_errors": [],
+  "tests": {
+    "tests/AnalyticsAndHealthTests.cs": [],
+    "tests/AssemblyInfo.cs": [],
+    "tests/CustomWebApplicationFactory.cs": [],
+    "tests/JsonTestHelper.cs": [],
+    "tests/RateLimitingAndPersistenceTests.cs": [],
+    "tests/RedirectEndpointTests.cs": [],
+    "tests/ShortenEndpointTests.cs": []
+  }
+}

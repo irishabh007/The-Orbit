@@ -12,27 +12,34 @@ hash-chained audit log from which every reported metric is computed.
 
 > The GitHub repository is named **The-Orbit**; the project inside it is **Warden**.
 
-## Known gap: two real bugs got through (being fixed)
+## Two real bugs got through, and how Warden now catches and fixes them
 
-An external review found two defects in the recorded .NET output that Warden's gates did not catch:
+An external review found two defects in the recorded .NET output that Warden's gates missed:
 
-- **Lost click counts:** the generated docs say counters update atomically, but the code reads, then
-  writes (`ClickCount += 1`), so concurrent redirects can lose counts.
-- **No schema migration:** the brownfield change adds a table and its docs call it an additive
-  migration, but the app uses `EnsureCreatedAsync()`, which never adds a table to an existing
-  database. The tests use fresh databases, so they passed, and the release review approved.
+- **Lost click counts:** the generated docs said counters update atomically, but the code read,
+  then wrote (`ClickCount += 1`), so concurrent redirects could lose counts.
+- **No schema migration:** the brownfield change added a table, but the app used
+  `EnsureCreatedAsync()`, which never adds a table to an existing database. The tests used fresh
+  databases, so they passed, and the release review approved.
 
-**Why they got through:** verify proves the code *builds and its tests pass*; nothing checked that
+**Why they got through:** verify proved the code *builds and its tests pass*; nothing checked that
 what the docs and design *claim* is true of the code, and no test upgraded an existing database.
-So the generated output is a reviewed, tested starting point, not production-ready code: that call
-stays with the human release gate.
 
-**What is being done:** rather than editing the generated code by hand, Warden will fix both bugs
-through its own governed process, with checks that would have caught them: the docs agent reads
-the code, a consistency-review step checks claims against code before release, and verify fails a
-.NET change that adds a table without an EF Core migration. The result will be a new recorded
-brownfield run in [docs/evidence/](docs/evidence/). Status and details:
-[ENGINEERING_SUMMARY.md](docs/ENGINEERING_SUMMARY.md#external-review-findings-and-responses).
+**What changed:** a **consistency review** now runs before release. The docs agent writes from the
+verified code; a reviewer agent checks every claim against the code; and deterministic .NET rules
+(no model involved) flag read-then-write counters and `EnsureCreated`. Blocking findings go back to
+whoever owns them, in a bounded repair loop.
+
+**The fix, done by Warden itself:** `python run_demo.py harden --auto-approve` replays a recorded
+run in which Warden repairs both bugs in the released app through its own gates. The consistency
+review caught two leftovers that every test had passed (a remaining `EnsureCreated` and one
+read-then-write daily counter) and sent them back to the developer. The result: atomic counters
+(`ExecuteUpdateAsync`, `INSERT ... ON CONFLICT DO UPDATE`), an EF Core migration with an upgrade
+path for existing databases, a 100-way concurrent-redirect test and a legacy-database upgrade test,
+**52/52 tests passing**, docs that match the code. Evidence: [docs/evidence/harden/](docs/evidence/harden/).
+
+The generated output is a reviewed, tested starting point; whether it ships stays a human decision
+at the release gate.
 
 ## Quick start (no API key needed)
 
@@ -91,6 +98,7 @@ All of it, unedited, is in [docs/evidence/](docs/evidence/).
 | `run_demo.py brownfield` | Add daily click analytics to the existing **.NET** app: C# codebase scan, grounded impact analysis with human sign-off, revision of existing code | **Recorded**: builds on the released greenfield app; one repair loop (build error), then release |
 | `run_demo.py ambiguous` | "Make links safer and give marketing better insights": blocking clarifying questions, human answers, requirements re-planned; .NET product | **Recorded; ends FAILED**: the 6-loop repair budget runs out (best 18/26) and nothing is released; see [scenarios](docs/SCENARIOS.md) |
 | `run_demo.py greenfield-python` | The same brief on the Python stack (FastAPI): 9 requirements, 12 traced tasks, 18 files, 30 generated tests passing after 2 automatic repair loops | **Recorded** from gemini-3.8-flash; shows the stacks are pluggable |
+| `run_demo.py harden` | Warden fixes the two production defects a reviewer found in its own output (lost click counts, missing schema migration), with the **consistency review** before release | **Recorded**: review caught 2 leftovers the tests missed; fixed; 52/52 tests; released |
 | `run_demo.py new` | **Your own idea**, interactively: type it (or `--request-file`), answer clarifying questions one at a time, approve the readable spec (then locked) and plan; Warden builds an ASP.NET Core API + xUnit tests, verified with `dotnet build`/`dotnet test`; nothing outside the approved plan lands without your approval | Live Gemini, recorded for replay |
 | `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change, human rollback of a shipped feature, resume mid-graph from existing artifacts | Scripted (no model needed) |
 
@@ -131,7 +139,7 @@ design may not approve the release). Your approvals are recorded under your logi
 | [Walkthrough](docs/WALKTHROUGH.md) | A 10-minute guided tour mapped to the evaluation criteria |
 | [Architecture](docs/ARCHITECTURE.md) | Components, orchestration model, control flow, governance, key decisions |
 | [Scenarios](docs/SCENARIOS.md) | Decomposition, orchestration and validation for each scenario |
-| [Evidence](docs/evidence/) | Reports, audit logs and generated code from the three recorded .NET runs |
+| [Evidence](docs/evidence/) | Reports, audit logs and generated code from the four recorded .NET runs |
 | [Testing](docs/TESTING.md) | Testing approach, how to run it, what each layer proves |
 | [Engineering summary](docs/ENGINEERING_SUMMARY.md) | Plan and rationale, artifacts, risks and trade-offs, assumptions, limitations, lessons from real runs |
 | [Recording runbook](docs/RECORDING.md) | How the scenarios were recorded, and how to re-record one |

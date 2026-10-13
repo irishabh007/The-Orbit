@@ -118,7 +118,7 @@ a recorded run replayed end to end with the real generated tests executing). The
 - [ARCHITECTURE.md](ARCHITECTURE.md): state machine, per-attempt control flow, bounded failure
   handling, key decisions with alternatives.
 - [ENGINEERING_SUMMARY.md](ENGINEERING_SUMMARY.md): risks with how each is validated, assumptions,
-  honest limitations, and **19 defects found only by real runs and environment probes**, each fixed
+  honest limitations, and **20 defects found only by real runs and environment probes**, each fixed
   with a regression test.
 
 *Criteria: architecture quality; validation and risk rigor; defensible decisions; engineering

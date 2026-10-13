@@ -36,7 +36,7 @@ Two principles shaped most decisions:
 | Agents (7 roles), LLM adapters, tools | `warden/agents`, `warden/llm`, `warden/tools` |
 | Policy | `policies/default.yaml` |
 | Demo runner, scenarios, failure demos | `run_demo.py`, `demo/` |
-| Recorded real-model runs | `recordings/`: greenfield, brownfield, ambiguous (.NET; 14, 10 and 23 calls) and greenfield-python (12), gemini-3.8-flash |
+| Recorded real-model runs | `recordings/`: greenfield, brownfield, ambiguous, harden (.NET; 14, 10, 23 and 19 calls) and greenfield-python (12), gemini-3.8-flash |
 | Generated URL shortener (per run) | `runs/greenfield/repo`: ASP.NET Core + xUnit, 23 files, ~2,000 lines, 31 passing tests |
 | Committed evidence | `docs/evidence/`: reports, audit logs, specs, designs, the generated repo, the brownfield diff |
 | Per-run evidence | `runs/<scenario>/events.jsonl`, `report.md`, `metrics.json`, `spec.json`, `design.json`, `verify_report.json`, `release_review.json` |
@@ -50,7 +50,7 @@ Two principles shaped most decisions:
 | Model output is malformed or invented | Strict schemas (extra fields forbidden); cross-artifact checks (tasks cite real requirements, impact cites real modules); one repair round, then bounded retries | `test_agents.py`; real runs: invalid JSON caught by the schema check and retried, C# syntax errors caught by the build gate |
 | Generated code does not work | Verify runs the generated tests and lint; failures go back to both authors with role-specific guidance | Real .NET runs: 3 → 3 → 27 → 30 → 31 of 31 over 4 repair loops (greenfield); build error → 50/50 (brownfield); the ambiguous run exhausted its budget and stopped with nothing released |
 | Secrets or personal data leak into code or logs | Policy denies; reasons never echo the value; the child environment is scrubbed of keys; keys are never logged | Tests assert the secret is absent from the log and report; the child process cannot see the key |
-| Generated docs claim what the code does not do | **Open** (found by an external review; see below) | Planned: docs from code, a consistency reviewer before release |
+| Generated docs claim what the code does not do | Docs written from the verified code; a consistency reviewer (model + deterministic stack rules) before release; blocking findings routed to their owner | `tests/test_review.py`; the recorded `harden` run, where the review caught 2 defects all tests had passed |
 | Agents exceed their remit | Autonomy per role; protected paths need a human; agents can only add oversight; undeclared outputs are rejected | Policy and orchestrator tests; failure demos |
 | A human decision is not traceable | Approvals are linked into `caused_by` lineage; the report traces the release back to every human decision | Real run: the release lineage reaches all 13 human decisions (122 linked events) |
 | Audit log is tampered with | Hash chain (`verify()` locates the break) plus the head hash anchored in each git commit | `test_eventlog.py` forges a full rewrite that `verify()` accepts and the anchor rejects |
@@ -117,17 +117,22 @@ An external review of the submission found six issues. Each was verified against
 
 | Finding | Status | Response |
 |---|---|---|
-| Generated `architecture.md` says click counts update "atomically"; `LinkService.cs` does `ClickCount += 1` (read, then write), so concurrent redirects can lose counts | **Open** | Kept in the evidence as generated. See the plan below |
-| Brownfield docs describe a "purely additive" schema migration for the new table, but there is no migration: `EnsureCreatedAsync()` never adds a table to an existing database. Tests use fresh databases, so they pass, and the release reviewer approved | **Open** | Same plan; plus a brownfield verify that upgrades an existing database |
-| The docs agent works from the design only and never sees the code; no gate checks docs against code | **Open** | Planned: docs agent consumes the code and tests; a consistency-reviewer node before release whose blocking findings go back to developer and docs as feedback (bounded like the repair loop); .NET prompt guidance (EF Core migrations, `ExecuteUpdateAsync` for counters). It changes prompts and the graph, so the recorded scenarios must be re-recorded |
+| Generated `architecture.md` says click counts update "atomically"; `LinkService.cs` does `ClickCount += 1` (read, then write), so concurrent redirects can lose counts | **Fixed by Warden** | The `harden` run: atomic `ExecuteUpdateAsync` and an `ON CONFLICT DO UPDATE` upsert, plus a 100-way concurrent-redirect test. The original evidence is kept as generated |
+| Brownfield docs describe a "purely additive" schema migration for the new table, but there is no migration: `EnsureCreatedAsync()` never adds a table to an existing database. Tests use fresh databases, so they pass, and the release reviewer approved | **Fixed by Warden** | The `harden` run: an EF Core migration applied at startup, an upgrade path for databases created by `EnsureCreated`, and a test that upgrades a first-release database (42 clicks kept, then 43) |
+| The docs agent works from the design only and never sees the code; no gate checks docs against code | **Fixed** | `review=True` graphs: docs from the verified code, then a consistency reviewer whose blocking findings go to their owner (targeted repair, bounded). Deterministic .NET rules flag read-then-write counters and `EnsureCreated`. On for `new` and `harden`; the earlier recorded scenarios keep their original graphs so they still replay |
 | Approvals block the scheduler; no timeout | **Fixed** | `decide()` runs on an approval thread; the decision is applied on the scheduler thread; `Config.approval_timeout_s` fails the gate closed. Escalation to a second approver is not built yet (it needs new event types) |
 | Approver identity is a string; no roles; one person can approve everything | **Fixed (authorization)** | Policy `approvals`: roles per gate and separation of duties, enforced on every approval and kept across resume; console identity is the OS login. Authentication stays with the host (SSO, code review system) |
 | "Changes requested" feedback is lost on resume | **Fixed** | Pending feedback is saved in the state file and restored |
 
-The open finding is the important one: Warden verifies that generated code *works* (builds, tests
-pass), but nothing yet verifies that what the generated docs and design *claim* is true of the code.
-Passing tests on a fresh database also hid a missing schema migration, which a human reviewer
-would catch only by reading the code.
+The lesson: verifying that generated code *works* (builds, tests pass) is not enough; what the docs
+and design *claim* must be checked against the code, and data-preserving upgrades need their own
+test. In the `harden` run the consistency review caught a remaining `EnsureCreated` and a
+read-then-write daily counter after **all 52 tests had passed**.
+
+Known limits of the review: the deterministic rules are pattern-based; in the `harden` run one rule
+flagged an `EnsureCreated` that ran only for EF's in-memory test provider (a false positive; the
+developer restructured the code anyway). The model reviewer can miss things; it adds a check, it
+does not replace the human release decision.
 
 ## Lessons from real runs
 
@@ -155,6 +160,7 @@ real .NET toolchain found the rest. Each defect below was fixed with a regressio
 | 17 | `dotnet test -v q` printed no failure messages, so agents repaired blind (4,000 characters of noise) | TRX results turned into a digest grouped by root cause (a few lines) |
 | 18 | Flaky generated tests changed a repair prompt by one line, so replays missed and reruns paid again | Closest-match replay for the same agent (≥ 99% alike), marked `replay-nearest` |
 | 19 | A billing denial (HTTP 403) was retried by every agent until exhausted | Requests the model service refuses (4xx) are permanent: the run stops at once with the reason |
+| 20 | A leftover retry loop started a second run on the same folder; its cleanup deleted the live run's files | The run directory is held under an OS file lock; a second run fails fast and deletes nothing |
 
 ## How this maps to the brief
 

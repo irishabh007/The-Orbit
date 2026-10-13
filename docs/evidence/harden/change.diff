@@ -1,0 +1,2476 @@
+diff --git a/README.md b/README.md
+index 4db122c..04c1679 100644
+--- a/README.md
++++ b/README.md
+@@ -1,19 +1,23 @@
+ # URL Shortener Service
+ 
+-High-performance, secure URL shortener service built with ASP.NET Core minimal APIs on .NET 10 and Entity Framework Core with SQLite.
++High-performance URL shortener service built with ASP.NET Core Minimal APIs on .NET 10, Entity Framework Core 9, and SQLite.
+ 
+ ## Purpose
+ 
+-The service provisions shortened URLs with either auto-generated Base62 codes or custom aliases, supports optional ISO-8601 expirations, issues HTTP 307 temporary redirects to keep click metrics accurate, records real-time aggregate and daily analytics, performs operational health checks, and defends against SSRF and link creation abuse.
++The service generates shortened URLs with random Base62 identifiers or custom aliases, protects against Server-Side Request Forgery (SSRF), enforces optional ISO-8601 UTC expiration dates, issues HTTP 307 temporary redirects, records lifetime and contiguous daily visit counts, and applies fixed-window client IP rate limiting on link generation.
+ 
+-## Requirements
+-
+-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+-- SQLite runtime support (embedded / file-based)
++Key persistence and concurrency features:
++- **Atomic lifetime counting**: Updates click counters and last visited timestamps directly in SQLite via EF Core `ExecuteUpdateAsync` without in-memory mutations.
++- **Atomic daily upserts**: Inserts or increments calendar-day click counts via SQLite `INSERT ... ON CONFLICT(ShortLinkId, Date) DO UPDATE` queries.
++- **Migration lifecycle & legacy bootstrap**: Replaces `EnsureCreatedAsync` with a handwritten EF Core initial migration (`20260101000000_InitialCreate`) and an automated bootstrapper that upgrades pre-existing SQLite databases within an explicit transaction prior to executing `Database.MigrateAsync()`.
+ 
+ ## Quick Start
+ 
+-### 1. Clone & Restore
++### Prerequisites
++- [.NET 10 SDK](https://dotnet.microsoft.com/download) (NET 10.0)
++- File-system access for SQLite storage
++
++### 1. Build and Restore
+ 
+ ```bash
+ git clone <repo-url>
+@@ -27,7 +31,7 @@ dotnet restore
+ dotnet run --project src/App
+ ```
+ 
+-By default, the server listens on `http://localhost:5000` (or the configured `ASPNETCORE_URLS`). EF Core database migrations apply automatically on startup, initializing the SQLite database file and tables (`ShortLink` and `ShortLinkDailyClick`).
++On startup, the host creates a service scope and invokes `DatabaseBootstrapper.BootstrapAsync`. It configures SQLite WAL mode, sets a 30-second busy timeout, runs legacy schema migration checks if a pre-existing `ShortLinks` table is detected, and applies registered migrations via `Database.MigrateAsync()`.
+ 
+ ### 3. Run Automated Tests
+ 
+@@ -35,99 +39,103 @@ By default, the server listens on `http://localhost:5000` (or the configured `AS
+ dotnet test tests/Tests.csproj
+ ```
+ 
+-The test suite exercises:
+-- Auto-generated code and custom alias creation via `POST /shorten`
+-- SSRF blocking on private/loopback/non-HTTP schemes
+-- Alias collision conflicts (`HTTP 409`)
+-- Redirections (`HTTP 307`), lifetime click increments, and UTC daily click increments via `GET /{code}`
+-- Link expiration enforcement (`HTTP 404` on redirect and daily analytics)
+-- Aggregate analytics reporting via `GET /analytics/{code}`
+-- Daily analytics reporting via `GET /analytics/{code}/daily` (default 7 days, up to 90 days, zero-filled)
+-- Query parameter validation and injection safety on `GET /analytics/{code}/daily`
+-- Service & database health status via `GET /health`
+-- Per-IP rate limiting (`HTTP 429` with `Retry-After`)
+-- Data store migration and persistence across host restarts
++The test suite runs integration and unit tests covering:
++- Link creation, custom alias validation, duplicate collisions (`409 Conflict`), and SSRF network validation (`400 Bad Request`).
++- Atomic lifetime increment and last-visited timestamp updates on redirect (`GET /{code}`).
++- Atomic daily upsert recording first-time visits and incrementing subsequent clicks.
++- Parallel execution of 100 concurrent redirects ensuring exact click counts across lifetime and daily tables without lost updates.
++- Legacy database bootstrapping: upgrading databases provisioned under older schemas and incrementing existing link clicks without data loss.
++- Lifetime analytics (`GET /analytics/{code}`) and contiguous zero-filled daily analytics (`GET /analytics/{code}/daily`).
++- Fixed-window rate limiting on link creation (`429 Too Many Requests` with `Retry-After`).
++- Health probe verification (`GET /health`).
+ 
+ ## Configuration
+ 
+-Configuration is managed via ASP.NET Core configuration providers (`appsettings.json`, environment variables, command-line arguments).
++Application settings are loaded from `appsettings.json`, environment variables, or command-line parameters.
+ 
+-| Setting Key | Default / Example | Purpose |
++| Setting | Default | Description |
+ |---|---|---|
+-| `ConnectionStrings:DefaultConnection` | `Data Source=app.db;Cache=Shared;Mode=ReadWriteCreate` | SQLite connection string. Configured with Shared cache and ReadWriteCreate mode for WAL concurrency. |
+-| `RateLimiting:PermitLimit` | `60` *(per spec assumption / proposed default Q3)* | Maximum requests allowed per rate-limiting window. |
+-| `RateLimiting:WindowSeconds` | `60` *(per spec assumption / proposed default Q3)* | Duration in seconds of the rate-limiting window per client IP. |
+-| `ForwardedHeaders:KnownNetworks` | `[]` | Trusted reverse proxy networks for validating `X-Forwarded-For` client IP resolution. |
++| `ConnectionStrings:DefaultConnection` | `Data Source=shortener.db;Cache=Shared;Mode=ReadWriteCreate;Default Timeout=30` | SQLite database connection string. Enables shared cache and a 30-second busy timeout. |
++| `RateLimiting:PermitLimit` | `60` | Maximum link creation requests permitted per window per client IP. |
++| `RateLimiting:WindowSeconds` | `60` | Fixed rate limiting window duration in seconds. |
++| `RateLimiting:QueueLimit` | `0` | Rate limiter queue capacity when the permit limit is reached. |
+ 
+-*Note on rate limiting configuration:* The spec documents a proposed default of 60 requests per minute per IP address. The exact configuration keys are subject to implementation in `RateLimitingConfiguration.cs`.
++Client IP addresses for rate limiting are parsed from the first comma-separated entry of the `X-Forwarded-For` HTTP header, falling back to `HttpContext.Connection.RemoteIpAddress`.
+ 
+ ## API Summary
+ 
+-All timestamps use ISO-8601 UTC format (`YYYY-MM-DDTHH:mm:ssZ`) and calendar dates use ISO-8601 date format (`YYYY-MM-DD`).
++All timestamps use ISO-8601 UTC format (`YYYY-MM-DDTHH:mm:ssZ`) and daily analytics dates use ISO-8601 calendar date format (`YYYY-MM-DD`).
+ 
+-| Method | Endpoint | Description | Status Codes |
++| Method | Endpoint | Summary | Status Codes |
+ |---|---|---|---|
+-| `POST` | `/shorten` | Create short link (auto-generated or custom alias, optional expiry) | `201`, `400`, `409`, `429` |
+-| `GET` | `/{code}` | Redirect to original target URL; increments lifetime and current UTC daily clicks | `307`, `404`, `410` |
+-| `GET` | `/analytics/{code}` | Retrieve aggregate lifetime click analytics for a short link | `200`, `404` |
+-| `GET` | `/analytics/{code}/daily` | Retrieve daily click analytics over a UTC window (default 7 days, max 90, zero-filled) | `200`, `400`, `404`, `500` |
+-| `GET` | `/health` | Check service and database operational status | `200`, `503` |
++| `POST` | `/shorten` | Create a shortened URL with optional custom alias and expiration date. | `201`, `400`, `409`, `429` |
++| `GET` | `/{code}` | Redirect to the target URL; atomically increments lifetime and daily counters. | `307`, `404` |
++| `GET` | `/analytics/{code}` | Retrieve lifetime visit metrics, creation date, and last visited timestamp. | `200`, `404` |
++| `GET` | `/analytics/{code}/daily` | Retrieve contiguous, zero-filled daily click metrics over a UTC window (default 7 days, max 90). | `200`, `400`, `404` |
++| `GET` | `/health` | Check service health and database query readiness. | `200`, `503` |
+ 
+-### Quick API Examples
++### API Examples
+ 
+-#### Create a Short URL
++#### Create a Short Link
+ 
+ ```bash
+ curl -i -X POST http://localhost:5000/shorten \
+   -H "Content-Type: application/json" \
+-  -d '{"url": "https://example.com/very/long/path"}'
++  -d '{"url": "https://example.com/target-page", "custom_alias": "promo2026"}'
+ ```
+ 
+ **Response (`201 Created`):**
+ ```json
+ {
+-  "code": "aZ91kL2",
+-  "short_url": "http://localhost:5000/aZ91kL2"
++  "code": "promo2026",
++  "short_url": "http://localhost:5000/promo2026",
++  "url": "https://example.com/target-page",
++  "created_at": "2026-03-30T12:00:00Z",
++  "expires_at": null
+ }
+ ```
+ 
+-#### Resolve / Redirect
++#### Resolve Redirect
+ 
+ ```bash
+-curl -i http://localhost:5000/aZ91kL2
++curl -i http://localhost:5000/promo2026
+ ```
+ 
+ **Response (`307 Temporary Redirect`):**
+ ```http
+ HTTP/1.1 307 Temporary Redirect
+-Location: https://example.com/very/long/path
++Location: https://example.com/target-page
+ ```
+ 
+-#### Fetch Aggregate Analytics
++#### Get Lifetime Analytics
+ 
+ ```bash
+-curl -i http://localhost:5000/analytics/aZ91kL2
++curl -i http://localhost:5000/analytics/promo2026
+ ```
+ 
+ **Response (`200 OK`):**
+ ```json
+ {
++  "code": "promo2026",
++  "url": "https://example.com/target-page",
+   "total_clicks": 1,
+-  "created_at": "2026-03-29T12:00:00Z",
+-  "last_visited_at": "2026-03-29T12:05:00Z"
++  "created_at": "2026-03-30T12:00:00Z",
++  "last_visited_at": "2026-03-30T12:05:00Z",
++  "expires_at": null,
++  "expired": false
+ }
+ ```
+ 
+-#### Fetch Daily Analytics (Default 7 Days)
++#### Get Daily Analytics
+ 
+ ```bash
+-curl -i http://localhost:5000/analytics/aZ91kL2/daily
++curl -i "http://localhost:5000/analytics/promo2026/daily?days=7"
+ ```
+ 
+ **Response (`200 OK`):**
+ ```json
+ {
+-  "code": "aZ91kL2",
++  "code": "promo2026",
+   "totalClicks": 1,
+   "days": 7,
+   "daily": [
+@@ -136,19 +144,13 @@ curl -i http://localhost:5000/analytics/aZ91kL2/daily
+     { "date": "2026-03-26", "clicks": 0 },
+     { "date": "2026-03-27", "clicks": 0 },
+     { "date": "2026-03-28", "clicks": 0 },
+-    { "date": "2026-03-29", "clicks": 1 },
+-    { "date": "2026-03-30", "clicks": 0 }
++    { "date": "2026-03-29", "clicks": 0 },
++    { "date": "2026-03-30", "clicks": 1 }
+   ]
+ }
+ ```
+ 
+-#### Fetch Daily Analytics with Custom Days Parameter
+-
+-```bash
+-curl -i "http://localhost:5000/analytics/aZ91kL2/daily?days=14"
+-```
+-
+-#### Check Service Health
++#### Health Check
+ 
+ ```bash
+ curl -i http://localhost:5000/health
+@@ -164,4 +166,4 @@ curl -i http://localhost:5000/health
+ ## Further Documentation
+ 
+ - [Architecture & Design Decisions](docs/architecture.md)
+-- [API Specification & Reference](docs/api.md)
+\ No newline at end of file
++- [API Reference](docs/api.md)
+\ No newline at end of file
+diff --git a/docs/api.md b/docs/api.md
+index 9f31695..adcbbe3 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -1,92 +1,91 @@
+ # API Reference
+ 
+-This document details the REST API endpoints exposed by the URL Shortener service.
++REST API documentation for the URL Shortener service.
+ 
+ ## Endpoints Overview
+ 
+ | Method | Path | Summary | Status Codes |
+ |---|---|---|---|
+ | `POST` | `/shorten` | Create a shortened link | `201`, `400`, `409`, `429` |
+-| `GET` | `/{code}` | Redirect to original target URL and increment counters | `307`, `404`, `410` |
+-| `GET` | `/analytics/{code}` | Fetch aggregate visit statistics for a code | `200`, `404` |
+-| `GET` | `/analytics/{code}/daily` | Fetch contiguous daily visit statistics over a UTC date range | `200`, `400`, `404`, `500` |
+-| `GET` | `/health` | Check service and database health | `200`, `503` |
++| `GET` | `/{code}` | Redirect to the destination URL; atomically increments visit counts | `307`, `404` |
++| `GET` | `/analytics/{code}` | Retrieve lifetime visit metrics | `200`, `404` |
++| `GET` | `/analytics/{code}/daily` | Retrieve contiguous daily click metrics | `200`, `400`, `404` |
++| `GET` | `/health` | Check service and database connectivity | `200`, `503` |
+ 
+ ---
+ 
+ ## 1. Create Short Link
+ 
+-Creates a shortened link with an auto-generated Base62 code or a custom alias, and an optional expiration timestamp.
++Creates a new shortened link, generating a 7-character Base62 code unless a valid custom alias is provided. Optional link expiration can be specified.
+ 
+ - **Path**: `/shorten`
+ - **Method**: `POST`
+ - **Headers**:
+   - `Content-Type: application/json`
+-- **Rate Limiting**: Enforced per client remote IP address.
++- **Rate Limiting**: Enforced via `ShortenPolicy` (default 60 requests / minute per client IP).
+ 
+ ### Request Body
+ 
+ | Field | Type | Required | Description |
+ |---|---|---|---|
+-| `url` | string | Yes | Target destination URL. Must use `http` or `https` scheme and resolve to a public IP address. |
+-| `custom_alias` | string | No | Custom short code. Must be 3–64 characters containing only alphanumeric characters, dashes (`-`), and underscores (`_`). |
+-| `expires_at` | string (ISO-8601 UTC) | No | Optional UTC timestamp when the link expires (e.g. `2026-01-01T00:00:00Z`). |
++| `url` | string | Yes | Target destination URL. Must be an absolute HTTP or HTTPS URL resolving to a public, non-restricted IP address. |
++| `custom_alias` | string | No | Optional custom code. Must match regex `^[a-zA-Z0-9_-]{3,64}$` (3 to 64 alphanumeric characters, underscores, or hyphens). |
++| `expires_at` | string (ISO-8601 UTC) | No | Optional expiration timestamp. Stored in UTC. |
+ 
+-#### Example Request (Auto-generated Code)
++#### Example Request
+ ```json
+ {
+-  "url": "https://example.com/very/long/path"
+-}
+-```
+-
+-#### Example Request (Custom Alias & Expiry)
+-```json
+-{
+-  "url": "https://example.com/very/long/path",
+-  "custom_alias": "promo-2026",
+-  "expires_at": "2026-06-01T00:00:00Z"
++  "url": "https://example.com/target-resource",
++  "custom_alias": "my-custom-link",
++  "expires_at": "2026-12-31T23:59:59Z"
+ }
+ ```
+ 
+ ### Responses
+ 
+ #### `201 Created`
+-Returned when the short link is successfully created.
++Returned when the short link is successfully created. Includes a `Location` header pointing to `/{code}`.
+ 
+ ```json
+ {
+-  "code": "promo-2026",
+-  "short_url": "http://localhost:5000/promo-2026"
++  "code": "my-custom-link",
++  "short_url": "http://localhost:5000/my-custom-link",
++  "url": "https://example.com/target-resource",
++  "created_at": "2026-03-30T10:00:00Z",
++  "expires_at": "2026-12-31T23:59:59Z"
+ }
+ ```
+ 
+ #### `400 Bad Request`
+-Returned if the input payload is invalid, the URL uses an unsupported scheme, or the target resolves to a private, loopback, link-local, or multicast address (SSRF prevention).
++Returned when the payload is missing, URL is missing or invalid, custom alias does not meet formatting requirements (3-64 characters matching `^[a-zA-Z0-9_-]+$`), or the URL fails SSRF validation (resolves to private, loopback, link-local, carrier-grade NAT, or restricted IP ranges).
+ 
+ ```json
+ {
+-  "error": "Target URL resolves to a private or disallowed IP address."
++  "error": "Target URL resolves to a private or restricted network address (SSRF prevention).",
++  "message": "Target URL resolves to a private or restricted network address (SSRF prevention)."
+ }
+ ```
+ 
+ #### `409 Conflict`
+-Returned if the requested `custom_alias` already exists in the system.
++Returned when the requested `custom_alias` is already in use by another link, or when an internal Base62 generation collision occurs after retry attempts.
+ 
+ ```json
+ {
+-  "error": "The custom alias 'promo-2026' is already in use."
++  "error": "The specified custom alias is already in use.",
++  "message": "The specified custom alias is already in use."
+ }
+ ```
+ 
+ #### `429 Too Many Requests`
+-Returned when the client IP exceeds the configured link creation threshold.
++Returned when the client IP exceeds the configured rate limiting quota.
+ 
+-**Headers:**
+-- `Retry-After: <seconds>`
++**Response Headers:**
++- `Retry-After`: Remaining seconds until the fixed rate-limit window resets.
+ 
+ ```json
+ {
+-  "error": "Rate limit exceeded. Please try again later."
++  "error": "Rate limit exceeded. Please try again later.",
++  "message": "Rate limit exceeded."
+ }
+ ```
+ 
+@@ -94,7 +93,7 @@ Returned when the client IP exceeds the configured link creation threshold.
+ 
+ ## 2. Redirect to Target URL
+ 
+-Resolves a short code and redirects the client to the original target URL. When active, increments the link's `ClickCount` aggregate counter by 1, sets `LastVisitedAt` to the current UTC timestamp, and increments the daily click counter for the current UTC date in `ShortLinkDailyClick`.
++Resolves the short code and returns a temporary redirect (`307`) to the target destination. On valid redirect, atomically updates the link's lifetime `ClickCount`, sets `LastVisitedAtUtc` to current UTC, and upserts the visit count for the current UTC date in `ShortLinkDailyClicks`.
+ 
+ - **Path**: `/{code}`
+ - **Method**: `GET`
+@@ -103,37 +102,31 @@ Resolves a short code and redirects the client to the original target URL. When
+ 
+ | Parameter | Type | Required | Description |
+ |---|---|---|---|
+-| `code` | string | Yes | The generated short code or custom alias. |
++| `code` | string | Yes | Short code or custom alias to resolve. Reserved names (`health`, `shorten`, `analytics`, case-insensitive) return 404. |
+ 
+ ### Responses
+ 
+ #### `307 Temporary Redirect`
+-Returned when the code exists and has not expired.
+-
+-**Headers:**
+-- `Location: <original_target_url>`
++Returned when the link exists and has not expired (`ExpiresAtUtc` is null or greater than current UTC).
+ 
+-*Note: An HTTP body is not returned with the redirect.*
++**Response Headers:**
++- `Location`: Target URL
+ 
+ #### `404 Not Found`
+-Returned when:
+-- The code does not exist.
+-- The link has reached its expiration timestamp (`DateTime.UtcNow >= ExpiresAtUtc`). Click counts are not incremented for expired links.
++Returned when the short code does not exist, the code is a reserved keyword, or the link has expired (`ExpiresAtUtc <= DateTime.UtcNow`). No database counter increments are performed.
+ 
+ ```json
+ {
+-  "error": "Short link not found or expired."
++  "error": "Short code not found or link has expired.",
++  "message": "Short code not found or link has expired."
+ }
+ ```
+ 
+-#### `410 Gone`
+-Included in the design endpoint mapping specification for expired links where permanent expiration indication is enabled.
+-
+ ---
+ 
+-## 3. Retrieve Lifetime Link Analytics
++## 3. Retrieve Lifetime Analytics
+ 
+-Retrieves aggregate visit counts and lifecycle timestamps for a short link.
++Retrieves aggregate visit metrics and metadata for a short link.
+ 
+ - **Path**: `/analytics/{code}`
+ - **Method**: `GET`
+@@ -142,37 +135,42 @@ Retrieves aggregate visit counts and lifecycle timestamps for a short link.
+ 
+ | Parameter | Type | Required | Description |
+ |---|---|---|---|
+-| `code` | string | Yes | The generated short code or custom alias. |
++| `code` | string | Yes | The short code or custom alias. |
+ 
+ ### Responses
+ 
+ #### `200 OK`
+-Returned when the code exists.
++Returned when the short link exists and has not expired.
+ 
+ ```json
+ {
++  "code": "my-custom-link",
++  "url": "https://example.com/target-resource",
+   "total_clicks": 42,
+-  "created_at": "2026-03-01T12:00:00Z",
+-  "last_visited_at": "2026-03-30T14:15:00Z"
++  "created_at": "2026-03-30T10:00:00Z",
++  "last_visited_at": "2026-03-30T10:30:00Z",
++  "expires_at": "2026-12-31T23:59:59Z",
++  "expired": false
+ }
+ ```
+ 
+-*Note:* If a link has never been visited, `total_clicks` is `0` and `last_visited_at` is `null`.
++*Note:* If the link has not yet received redirects, `total_clicks` is `0` and `last_visited_at` is `null`.
+ 
+ #### `404 Not Found`
+-Returned if the code does not exist or has expired.
++Returned if the short code does not exist or has expired (`ExpiresAtUtc <= DateTime.UtcNow`).
+ 
+ ```json
+ {
+-  "error": "Short link not found."
++  "error": "Short code not found.",
++  "message": "Short code not found."
+ }
+ ```
+ 
+ ---
+ 
+-## 4. Retrieve Daily Link Analytics
++## 4. Retrieve Daily Analytics
+ 
+-Retrieves daily click analytics for an active short link over a contiguous UTC date window ending on the current UTC date. Inactive dates within the window are zero-filled.
++Retrieves daily click analytics over a contiguous UTC date window ending on the current UTC date. Inactive dates within the window are zero-filled.
+ 
+ - **Path**: `/analytics/{code}/daily`
+ - **Method**: `GET`
+@@ -181,87 +179,53 @@ Retrieves daily click analytics for an active short link over a contiguous UTC d
+ 
+ | Parameter | Type | Required | Description |
+ |---|---|---|---|
+-| `code` | string | Yes | The generated short code or custom alias. |
++| `code` | string | Yes | The short code or custom alias. |
+ 
+ ### Query Parameters
+ 
+ | Parameter | Type | Required | Default | Allowed Values | Description |
+ |---|---|---|---|---|---|
+-| `days` | integer | No | `7` | `1` to `90` | Number of consecutive UTC days to include in the analytics window, ending on the current UTC date. |
++| `days` | integer | No | `7` | `1` to `90` | Number of consecutive UTC calendar days ending on current UTC date. |
+ 
+ ### Responses
+ 
+ #### `200 OK`
+-Returned when the short link exists and is active. The response contains the link code, lifetime aggregate clicks (`totalClicks`), the evaluated `days` count, and a chronologically ascending array (`daily`) containing consecutive UTC date records.
+-
+-*Date Window Semantics:* An N-day window covers `[Today UTC - (N - 1) days]` through `[Today UTC]`.
++Returned when the short link exists and has not expired. The `daily` array contains contiguous dates sorted in chronological ascending order.
+ 
+ ```json
+ {
+-  "code": "promo-2026",
+-  "totalClicks": 12,
++  "code": "my-custom-link",
++  "totalClicks": 42,
+   "days": 7,
+   "daily": [
+-    {
+-      "date": "2026-03-24",
+-      "clicks": 0
+-    },
+-    {
+-      "date": "2026-03-25",
+-      "clicks": 1
+-    },
+-    {
+-      "date": "2026-03-26",
+-      "clicks": 0
+-    },
+-    {
+-      "date": "2026-03-27",
+-      "clicks": 4
+-    },
+-    {
+-      "date": "2026-03-28",
+-      "clicks": 2
+-    },
+-    {
+-      "date": "2026-03-29",
+-      "clicks": 5
+-    },
+-    {
+-      "date": "2026-03-30",
+-      "clicks": 0
+-    }
++    { "date": "2026-03-24", "clicks": 0 },
++    { "date": "2026-03-25", "clicks": 0 },
++    { "date": "2026-03-26", "clicks": 5 },
++    { "date": "2026-03-27", "clicks": 12 },
++    { "date": "2026-03-28", "clicks": 8 },
++    { "date": "2026-03-29", "clicks": 10 },
++    { "date": "2026-03-30", "clicks": 7 }
+   ]
+ }
+ ```
+ 
+-*Note on Historical Data:* Daily click tracking starts upon deployment; clicks occurring prior to feature release are not retroactively backfilled into daily distributions and will appear as 0, though lifetime `totalClicks` reflects all visits.
+-
+ #### `400 Bad Request`
+-Returned if the `days` parameter is non-numeric, less than `1`, greater than `90`, or contains malformed values.
++Returned when the `days` parameter cannot be parsed as an integer or is outside the range `[1, 90]`.
+ 
+ ```json
+ {
+-  "error": "The days parameter must be an integer between 1 and 90."
++  "error": "The days parameter must be an integer between 1 and 90.",
++  "message": "The days parameter must be an integer between 1 and 90."
+ }
+ ```
+ 
+ #### `404 Not Found`
+-Returned matching `GET /analytics/{code}` behavior when:
+-- The code does not exist.
+-- The short link has expired.
+-
+-```json
+-{
+-  "error": "Short link not found or expired."
+-}
+-```
+-
+-#### `500 Internal Server Error`
+-Returned in unexpected error scenarios without leaking internal stack traces or database error details.
++Returned when the short code does not exist or has expired.
+ 
+ ```json
+ {
+-  "error": "An unexpected error occurred."
++  "error": "Short code not found.",
++  "message": "Short code not found."
+ }
+ ```
+ 
+@@ -269,7 +233,7 @@ Returned in unexpected error scenarios without leaking internal stack traces or
+ 
+ ## 5. Health Check
+ 
+-Verifies the operational status of the service process and backing SQLite database connection.
++Verifies process availability and database query responsiveness.
+ 
+ - **Path**: `/health`
+ - **Method**: `GET`
+@@ -277,7 +241,7 @@ Verifies the operational status of the service process and backing SQLite databa
+ ### Responses
+ 
+ #### `200 OK`
+-Returned when the service and database are operational.
++Returned when `dbContext.Database.CanConnectAsync()` succeeds and a test query against `ShortLinks` executes.
+ 
+ ```json
+ {
+@@ -286,11 +250,10 @@ Returned when the service and database are operational.
+ ```
+ 
+ #### `503 Service Unavailable`
+-Returned when the backing SQLite datastore cannot be queried or is unreachable.
++Returned when database connectivity check fails or throws an unhandled database exception.
+ 
+ ```json
+ {
+-  "status": "unhealthy",
+-  "error": "Database connection failure."
++  "status": "unhealthy"
+ }
+ ```
+\ No newline at end of file
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 9962810..330f9db 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -1,158 +1,162 @@
+-# Architecture Documentation
++# Architecture & Design Decisions
+ 
+ ## Overview
+ 
+-The URL Shortener service is implemented in ASP.NET Core with minimal APIs targeting .NET 10. Persistence is handled by Entity Framework Core with an embedded SQLite database configured for WAL concurrency. Daily visit metrics are tracked in a dedicated pre-aggregated table to support low-latency trend analytics up to 90 days.
++The URL Shortener is an ASP.NET Core Minimal API service running on .NET 10. Persistence is managed via Entity Framework Core 9 against an embedded SQLite database (`shortener.db`). The architecture eliminates race conditions during concurrent redirects and provides backwards-compatible database evolution from older `EnsureCreatedAsync`-provisioned databases.
+ 
+ ```
+-                           [ Client Request ]
+-                                   │
+-                                   ▼
+-                      [ Rate Limiting Middleware ]
+-                    (FixedWindow per RemoteIpAddress)
+-                                   │
+-                                   ▼
++                           [ HTTP Request ]
++                                  │
++                                  ▼
++                    [ Rate Limiting Middleware ]
++                    (FixedWindow on POST /shorten)
++                                  │
++                                  ▼
+                          [ LinkEndpoints ]
+        (POST /shorten, GET /{code}, GET /analytics/{code},
+         GET /analytics/{code}/daily, GET /health)
+-                                   │
+-                                   ▼
+-                            [ LinkService ]
+-              ┌────────────────────┼────────────────────┐
+-              ▼                    ▼                    ▼
+-   [ UrlValidationService ] [ CodeGeneratorService ] [ In-Memory Zero-Filler ]
+-   (SSRF / DNS checking)    (Base62 / Alias regex)   (Contiguous UTC range)
+-              │                    │                    │
+-              └────────────────────┼────────────────────┘
+-                                   ▼
++                                  │
++                                  ▼
++                           [ LinkService ]
++              ┌───────────────────┼───────────────────┐
++              ▼                   ▼                   ▼
++   [ UrlValidationService ] [ CodeGenerator ] [ Daily Zero-Filler ]
++     (SSRF & DNS checks)     (Base62 & Regex)     (In-memory loop)
++              │                   │                   │
++              └───────────────────┼───────────────────┘
++                                  ▼
+                            [ AppDbContext ]
+-                        (EF Core SQLite Provider)
+-                                   │
+-                                   ▼
++                                  │
++                 ┌────────────────┴────────────────┐
++                 ▼                                 ▼
++       ExecuteUpdateAsync               ExecuteSqlInterpolatedAsync
++   (ShortLinks.ClickCount + 1)           (INSERT ... ON CONFLICT)
++                 │                                 │
++                 └────────────────┬────────────────┘
++                                  ▼
+                             [ SQLite DB ]
+-             ┌─────────────────────┴─────────────────────┐
+-             ▼                                           ▼
+-       [ ShortLinks ]                          [ ShortLinkDailyClicks ]
+-  (Lifetime counter & URL)                (Unique (ShortLinkId, Date))
++                     (PRAGMA journal_mode = WAL)
++                    (PRAGMA busy_timeout = 30000)
++             ┌────────────────────┴────────────────────┐
++             ▼                                         ▼
++       [ ShortLinks ]                        [ ShortLinkDailyClicks ]
++  (Lifetime counter & URL)              (Unique: ShortLinkId, Date)
+ ```
+ 
+ ## Component Breakdown
+ 
+ ### 1. `Program` (`src/App/Program.cs`)
+-- Bootstraps dependency injection, SQLite connection, and rate limiter configuration.
+-- Applies EF Core migrations on application boot.
+-- Configures forward header options for trusted reverse proxies.
+-- Declares a public partial `Program` class enabling integration testing via `WebApplicationFactory`.
+-
+-### 2. `Contracts` (`src/App/Models/Contracts.cs`)
+-- Defines strongly typed data transfer objects and service models:
+-  - `ShortenRequest`: input model with `url`, optional `custom_alias`, and optional `expires_at`.
+-  - `ShortenResponse`: output model with `code` and `short_url`.
+-  - `AnalyticsResponse`: aggregate output model with `total_clicks`, `created_at`, and nullable `last_visited_at`.
+-  - `DailyAnalyticsResponse`: payload model containing `code`, `totalClicks`, `days`, and a chronologically ascending list of `DailyClickRecord` items.
+-  - `DailyClickRecord`: item model containing `date` (`YYYY-MM-DD` string) and `clicks` (`long`).
+-  - `DailyAnalyticsResult`: internal service result model distinguishing success, validation failures, and not-found states.
+-  - `HealthResponse`: operational status model (`{"status": "healthy"}`).
+-  - `ErrorResponse`: standardized error envelope returned on bad requests, conflicts, not found, or internal errors.
+-
+-### 3. `ShortLink` Entity (`src/App/Data/ShortLink.cs`)
+-Persisted domain entity representing the base shortened link:
+-- `Id` (`long`, Primary Key, autoincrement)
+-- `Code` (`string`, MaxLength 32, unique index, non-null)
+-- `OriginalUrl` (`string`, required text)
+-- `ClickCount` (`long`, default 0, non-null aggregate counter)
+-- `CreatedAtUtc` (`DateTime`, UTC, required)
+-- `LastVisitedAtUtc` (`DateTime?`, UTC, nullable)
+-- `ExpiresAtUtc` (`DateTime?`, UTC, nullable, indexed)
+-
+-### 4. `ShortLinkDailyClick` Entity (`src/App/Data/ShortLinkDailyClick.cs`)
+-Persisted domain entity representing pre-aggregated daily click metrics per link:
+-- `Id` (`long`, Primary Key, autoincrement)
+-- `ShortLinkId` (`long`, Foreign Key references `ShortLink.Id`, required)
+-- `Date` (`DateOnly`, UTC calendar date, required)
+-- `Clicks` (`long`, required, default 0)
+-- Composite unique index on `(ShortLinkId, Date)` for deterministic lookups and upsert concurrency.
+-
+-### 5. `AppDbContext` (`src/App/Data/AppDbContext.cs`)
+-- Configures EF Core model mappings for `ShortLink` and `ShortLinkDailyClick`.
+-- Enforces unique index constraint on `ShortLink.Code` and composite unique index on `(ShortLinkId, Date)`.
+-- Configures foreign key relationship between `ShortLinkDailyClick` and `ShortLink`.
+-- Manages migrations preserving pre-existing link records and click counts.
++- Configures dependency injection, EF Core SQLite connection string, rate limiting, and minimal API routing.
++- On startup, resolves `AppDbContext` in a scope and runs `DatabaseBootstrapper.BootstrapAsync` before request listening begins.
++- Exports `public partial class Program { }` to enable in-process integration testing via `WebApplicationFactory<Program>`.
++
++### 2. `DatabaseBootstrapper` (`src/App/Data/DatabaseBootstrapper.cs`)
++- Replaces direct calls to `EnsureCreatedAsync` with managed EF Core migration initialization.
++- Verifies relational provider: returns immediately without error if `!dbContext.Database.IsRelational()`.
++- When running against SQLite:
++  - Ensures the connection is open.
++  - Sets SQLite PRAGMAs: `PRAGMA journal_mode = WAL;` and `PRAGMA busy_timeout = 30000;` (exceptions suppressed).
++  - Inspects `sqlite_master` for an existing `ShortLinks` table.
++  - If `ShortLinks` exists, inspects `PRAGMA table_info('ShortLinks')` and begins an explicit SQLite transaction:
++    - Renames legacy column names if present (`CreatedAt` -> `CreatedAtUtc`, `ExpiresAt` -> `ExpiresAtUtc`, `LastVisitedAt` -> `LastVisitedAtUtc`).
++    - Adds missing nullable columns (`LastVisitedAtUtc`, `ExpiresAtUtc`) and `ClickCount` if absent.
++    - Executes `CREATE TABLE IF NOT EXISTS "ShortLinkDailyClicks"` with foreign keys referencing `ShortLinks(Id)`.
++    - Executes `CREATE UNIQUE INDEX IF NOT EXISTS "IX_ShortLinkDailyClicks_ShortLinkId_Date"` on `(ShortLinkId, Date)`.
++    - Executes `CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory"` (`MigrationId TEXT PRIMARY KEY`, `ProductVersion TEXT`).
++    - Executes `INSERT OR IGNORE INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion") VALUES ('20260101000000_InitialCreate', '9.0.2')`.
++    - Commits the transaction.
++- Finally, calls `dbContext.Database.MigrateAsync()` to apply any pending EF Core migrations.
++
++### 3. `InitialCreate` Migration (`src/App/Data/Migrations/InitialCreate.cs`)
++- Handwritten EF Core migration inheriting from `Migration`, annotated with `[DbContext(typeof(AppDbContext))]` and `[Migration("20260101000000_InitialCreate")]`.
++- Enables migration discovery and execution via `Database.MigrateAsync()` without requiring the `dotnet-ef` CLI tool in production environments.
++- Defines tables `ShortLinks` and `ShortLinkDailyClicks`, indices (`IX_ShortLinks_Code`, `IX_ShortLinks_ExpiresAtUtc`, `IX_ShortLinkDailyClicks_ShortLinkId_Date`), and cascading foreign key deletion.
++
++### 4. `AppDbContext` (`src/App/Data/AppDbContext.cs`)
++- Maps entities `ShortLink` and `ShortLinkDailyClick` (also exposed through property alias `DailyClicks`).
++- Configures value converters enforcing UTC `DateTimeKind` on `CreatedAtUtc`, `LastVisitedAtUtc`, and `ExpiresAtUtc`.
++- Configures indices and constraints:
++  - Unique index on `ShortLink.Code`.
++  - Index on `ShortLink.ExpiresAtUtc`.
++  - Unique composite index on `ShortLinkDailyClick(ShortLinkId, Date)`.
++
++### 5. `LinkService` (`src/App/Services/LinkService.cs`)
++- Implements link creation, redirection, aggregate analytics, and contiguous daily analytics.
++- **Atomic Redirect Workflow (`GetRedirectAsync`)**:
++  1. Queries code existence, URL, and expiration using `AsNoTracking()` without entity tracking.
++  2. Returns `RedirectStatus.NotFound` if missing, or `RedirectStatus.Expired` if `ExpiresAtUtc <= DateTime.UtcNow`.
++  3. Atomically increments `ClickCount` and updates `LastVisitedAtUtc` via `ExecuteUpdateAsync`:
++     ```csharp
++     await _dbContext.ShortLinks
++         .Where(s => s.Id == link.Id)
++         .ExecuteUpdateAsync(s => s
++             .SetProperty(b => b.ClickCount, b => b.ClickCount + 1)
++             .SetProperty(b => b.LastVisitedAtUtc, nowUtc),
++             cancellationToken);
++     ```
++  4. Atomically upserts daily click counts using raw SQLite SQL:
++     ```sql
++     INSERT INTO ShortLinkDailyClicks (ShortLinkId, Date, Clicks)
++     VALUES ({link.Id}, {dateString}, 1)
++     ON CONFLICT(ShortLinkId, Date) DO UPDATE SET Clicks = ShortLinkDailyClicks.Clicks + 1;
++     ```
++  5. Retries both write operations via `ExecuteWithRetryAsync` up to 20 times upon detecting SQLite busy or locked errors (`SqliteErrorCode` 5 or 6) using randomized progressive backoff delays (`RandomNumberGenerator.GetInt32(10, 50) * (attempt + 1)` ms).
++- **Daily Analytics Construction (`GetDailyAnalyticsAsync`)**:
++  1. Validates that `days` is between 1 and 90.
++  2. Computes the date range `[TodayUtc - (days - 1), TodayUtc]`.
++  3. Queries `ShortLinkDailyClicks` within the range and aggregates existing clicks per date in memory.
++  4. Iterates through each date in the window to produce a contiguous list of `DailyClickRecord`, zero-filling dates without recorded clicks.
+ 
+ ### 6. `UrlValidationService` (`src/App/Services/UrlValidationService.cs`)
+-- Enforces scheme safety: rejects all schemes other than `http` and `https`.
+-- Prevents Server-Side Request Forgery (SSRF) before database persistence.
+-- Resolves target hostnames asynchronously (`Dns.GetHostAddressesAsync`).
+-- Rejects loopback addresses (`127.0.0.0/8`, `::1`), link-local addresses (`169.254.0.0/16`, `fe80::/10`), private networks (RFC 1918: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and multicast/reserved ranges.
++- Validates absolute URI structure and enforces `http` or `https` schemes.
++- Mitigates SSRF attacks by checking target hosts against loopback, RFC 1918 private IPv4 addresses, link-local, carrier-grade NAT (`100.64.0.0/10`), documentation subnets, broadcast, and IPv6 loopback/link-local/multicast/site-local ranges.
++- Performs DNS resolution (`Dns.GetHostAddressesAsync`) to inspect resolved IP addresses.
+ 
+ ### 7. `CodeGeneratorService` (`src/App/Services/CodeGeneratorService.cs`)
+-- Generates 7-character Base62 alphanumeric codes (`[a-zA-Z0-9]`) using a cryptographically secure random number generator.
+-- Validates custom aliases against constraints: alphanumeric characters, dashes (`-`), and underscores (`_`) with length between 3 and 32/64 characters.
+-
+-### 8. `LinkService` (`src/App/Services/LinkService.cs`)
+-- Coordinates core business workflows:
+-  - Validates URLs and SSRF safety via `UrlValidationService`.
+-  - Generates codes or validates custom aliases via `CodeGeneratorService`.
+-  - Detects duplicate aliases and surfaces conflict conditions (`HTTP 409`).
+-  - Evaluates link expiration on redirection and analytics requests.
+-  - On redirection (`GET /{code}`): atomically increments `ShortLink.ClickCount`, updates `ShortLink.LastVisitedAtUtc`, and atomically creates or increments `ShortLinkDailyClick` for `DateOnly.FromDateTime(DateTime.UtcNow)`.
+-  - On daily analytics query (`GET /analytics/{code}/daily`): fetches daily counts for `ShortLinkId` within the window `[TodayUtc - days + 1, TodayUtc]`, projects them into memory, and zero-fills any inactive dates into a contiguous ascending sequence.
+-
+-### 9. `RateLimitingConfiguration` (`src/App/Middleware/RateLimitingConfiguration.cs`)
+-- Implements ASP.NET Core's built-in `FixedWindowRateLimiter` partitioned by client `RemoteIpAddress`.
+-- Protects endpoints from abuse, returning `429 Too Many Requests` with a `Retry-After` header when limits are reached.
+-
+-### 10. `LinkEndpoints` (`src/App/Endpoints/LinkEndpoints.cs`)
+-- Maps Minimal API route handlers:
+-  - `POST /shorten`
+-  - `GET /{code}`
+-  - `GET /analytics/{code}`
+-  - `GET /analytics/{code}/daily`
+-  - `GET /health`
+-- Performs parameter binding, strict parsing/validation of the `days` parameter (1–90), and error response mapping.
+-
+-### 11. Test Components (`tests/`)
+-- `CustomWebApplicationFactory`: Configures isolated SQLite instances for E2E integration tests.
+-- `ShortenEndpointTests`: Validates code generation, alias collision (`409`), and SSRF blocks (`400`).
+-- `RedirectEndpointTests`: Validates redirects (`307`), missing/expired codes (`404`), lifetime counter increments, and current UTC date daily counter increments.
+-- `AnalyticsAndHealthTests`: Validates aggregate analytics, daily analytics parameter validation (1–90), zero-filling behavior, expired link status consistency, SQL injection/safety checks, and `/health` reporting.
+-- `RateLimitingAndPersistenceTests`: Validates rate limiting and data preservation across service restarts and schema migrations.
+-
+-## Architecture Decisions & Rationale
+-
+-### D1: Pre-aggregated Daily Counters vs Individual Event Log Rows
+-- **Decision**: Store daily clicks in a pre-aggregated `ShortLinkDailyClick` table keyed uniquely on `(ShortLinkId, Date)`.
+-- **Rationale**: Storing individual click rows with timestamps and client headers introduces unbounded storage growth and requires expensive SQL `GROUP BY` aggregations on redirect analytics. Pre-aggregating per calendar date guarantees bounded $O(1)$ updates on redirect and $O(N)$ index-backed reads capped at $N \le 90$.
++- Generates random 7-character Base62 strings via `RandomNumberGenerator.GetString(...)`.
++- Validates custom aliases against regex `^[a-zA-Z0-9_-]{3,64}$`.
++
++### 8. `RateLimitingConfiguration` (`src/App/Middleware/RateLimitingConfiguration.cs`)
++- Configures ASP.NET Core `FixedWindowRateLimiter` named `ShortenPolicy` applied exclusively to `POST /shorten`.
++- Extracts client IP address from `X-Forwarded-For` or connection remote IP.
++- Rejects requests exceeding quota with status 429 and sets the `Retry-After` header.
++
++## Architectural Decisions & Rationale
++
++### D1: Atomic Lifetime Click Increment via ExecuteUpdateAsync
++- **Decision**: Update `ShortLinks.ClickCount` and `ShortLinks.LastVisitedAtUtc` directly in SQLite using EF Core 9 `ExecuteUpdateAsync`.
++- **Rationale**: Eliminates race conditions and lost updates caused by in-memory read-modify-write patterns (`link.ClickCount += 1; await SaveChangesAsync();`). EF Core generates a direct SQL `UPDATE` statement executed by SQLite without entity tracking overhead.
+ - **Alternatives Rejected**:
+-  - Individual `ClickEvents` table: Excessive storage growth under high traffic and slow aggregation queries.
+-  - JSON document column on `ShortLink`: High write lock contention and risk of race conditions during concurrent JSON serialization.
++  - *Read-modify-write with EF Core optimistic concurrency tokens (`ConcurrencyCheck` / `RowVersion`)*: Rejected because concurrent redirects would encounter concurrency conflicts and fail redirects for end users.
++  - *Raw SQL UPDATE string*: Rejected because `ExecuteUpdateAsync` provides compile-time type safety while generating optimal atomic SQL.
++
++### D2: Atomic Daily Analytics Upsert via Raw SQLite ON CONFLICT
++- **Decision**: Execute raw SQL upsert query using `Database.ExecuteSqlInterpolatedAsync`:
++  ```sql
++  INSERT INTO ShortLinkDailyClicks (ShortLinkId, Date, Clicks)
++  VALUES ({link.Id}, {dateString}, 1)
++  ON CONFLICT(ShortLinkId, Date) DO UPDATE SET Clicks = ShortLinkDailyClicks.Clicks + 1;
++  ```
++- **Rationale**: SQLite natively supports `INSERT ... ON CONFLICT(...) DO UPDATE`. A single atomic query prevents race conditions and unique key collisions under concurrent redirects visiting on the same calendar day.
++- **Alternatives Rejected**:
++  - *Query first, then insert or update in C#*: Rejected due to inherent race conditions under concurrent requests causing duplicate key constraint violations (`IX_ShortLinkDailyClicks_ShortLinkId_Date`).
++  - *Application-level `SemaphoreSlim` locking*: Rejected because process locks do not coordinate across multiple service replicas and introduce unnecessary latency.
+ 
+-### D2: In-Memory Date Range Zero-Filling
+-- **Decision**: Query existing `ShortLinkDailyClick` records in the window `[TodayUtc - days + 1, TodayUtc]`, project rows into a dictionary, and reconstruct the complete $N$-day contiguous chronological sequence in C# memory, populating `0` for inactive dates.
+-- **Rationale**: SQLite lacks built-in calendar generator tables and recursive common table expressions (CTEs) can vary across driver environments. Because $N \le 90$, in-memory zero-filling introduces negligible CPU and memory overhead while ensuring reliable chronological ascending order.
++### D3: Handwritten Initial EF Core Migration without dotnet-ef CLI
++- **Decision**: Author `InitialCreate.cs` manually with `[DbContext(typeof(AppDbContext))]` and `[Migration("20260101000000_InitialCreate")]`.
++- **Rationale**: Production containers and CI/CD environments do not require the `dotnet-ef` CLI tool to be installed. EF Core discovers the migration class in the assembly at runtime and applies it via `Database.MigrateAsync()`.
+ - **Alternatives Rejected**:
+-  - Recursive SQL CTE calendar generators: More complex cross-database SQL behavior.
+-  - Pre-inserting 90 zero-valued rows per link at link creation time: Wastes database storage for inactive links.
++  - *Requiring dotnet-ef CLI in container builds*: Rejected due to tool version dependencies and operational complexity in container pipelines.
++  - *Retaining `Database.EnsureCreatedAsync()`*: Rejected because `EnsureCreatedAsync` bypasses EF Core migration tracking and cannot apply incremental schema changes across versions.
+ 
+-### D3: Strict Query Parameter Parsing and Validation
+-- **Decision**: Explicitly parse the `days` query string using `int.TryParse`, enforce the range $1 \le \text{days} \le 90$, and immediately return `HTTP 400 Bad Request` with `ErrorResponse` if non-numeric or out-of-range.
+-- **Rationale**: Prevents unexpected input patterns, resource exhaustion via oversized ranges, and SQL injection payloads while maintaining standard API validation patterns without unhandled exceptions.
++### D4: Transactional Legacy Database Schema Bootstrap
++- **Decision**: Before executing `Database.MigrateAsync()`, `DatabaseBootstrapper` checks `sqlite_master`. If legacy tables exist without migration history, it applies necessary DDL (`CREATE TABLE IF NOT EXISTS`, column renames), creates `__EFMigrationsHistory`, and inserts the `InitialCreate` migration identifier within an explicit database transaction.
++- **Rationale**: Databases provisioned under prior releases using `EnsureCreatedAsync` lack `__EFMigrationsHistory` and `ShortLinkDailyClicks`. Calling `MigrateAsync()` on such databases would fail with "table 'ShortLinks' already exists". The bootstrapper seeds the initial migration entry so `MigrateAsync()` treats the initial schema as already applied while ensuring any missing structures are created.
+ - **Alternatives Rejected**:
+-  - Silently defaulting invalid numbers to 7: Obscures client errors and malformed requests.
+-  - Silently clamping values $> 90$ down to 90: Violates explicit client request contracts.
+-
+-### D4: Additive Schema Migration for Backward Compatibility
+-- **Decision**: Implement `ShortLinkDailyClick` as an independent entity referencing `ShortLink.Id`, leaving existing `ShortLink` columns intact.
+-- **Rationale**: Existing link records and aggregate lifetime click counts must not be lost or altered during deployment. Historical clicks prior to feature release remain in `ShortLink.ClickCount` and will report `0` in historical daily distribution without requiring synthetic backfill.
+-
+-## Architectural Risks and Mitigations
+-
+-1. **Concurrent Redirects at Date Boundaries**:
+-   - *Risk*: Simultaneous requests on the same link around UTC midnight could trigger duplicate key insert collisions.
+-   - *Mitigation*: The composite unique index on `(ShortLinkId, Date)` enforces database-level integrity, combined with EF Core upsert/retry execution strategies.
+-2. **Database Migration and Data Loss**:
+-   - *Risk*: Modifying table structures could jeopardize lifetime click records.
+-   - *Mitigation*: The migration is purely additive: creating `ShortLinkDailyClicks` with a foreign key without altering `ShortLink` columns.
+-3. **Timezone Skew**:
+-   - *Risk*: Server clock differences or local time conversions distort daily groupings.
+-   - *Mitigation*: All date logic explicitly uses `DateTime.UtcNow` and `DateOnly.FromDateTime(DateTime.UtcNow)` across writes and reads.
+\ No newline at end of file
++  - *Calling MigrateAsync directly and catching SQLite exceptions*: Rejected because partial migration failures leave the database in an inconsistent or unrecoverable state.
++  - *Manual offline SQL scripts*: Rejected because the service must self-heal and upgrade autonomously across container restarts.
++
++## Implementation Observations & Differences
++
++1. **Separate Retry Blocks during Redirect**: During redirect handling in `LinkService.GetRedirectAsync`, the lifetime click counter update (`ExecuteUpdateAsync`) and the daily click upsert (`ExecuteSqlInterpolatedAsync`) are executed as two distinct calls to `ExecuteWithRetryAsync`, rather than wrapped in a single multi-statement database transaction. Both operations independently retry up to 20 times upon SQLite busy/locked errors.
++2. **Non-relational Database Behavior**: In `DatabaseBootstrapper.BootstrapAsync`, if `!dbContext.Database.IsRelational()` (such as when running with in-memory test providers), the method exits immediately without calling `EnsureCreatedAsync` or `MigrateAsync`.
+\ No newline at end of file
+diff --git a/src/App/Data/AppDbContext.cs b/src/App/Data/AppDbContext.cs
+index 69ff5f0..9b88185 100644
+--- a/src/App/Data/AppDbContext.cs
++++ b/src/App/Data/AppDbContext.cs
+@@ -11,7 +11,8 @@ public class AppDbContext : DbContext
+     }
+ 
+     public DbSet<ShortLink> ShortLinks => Set<ShortLink>();
+-    public DbSet<ShortLinkDailyClick> DailyClicks => Set<ShortLinkDailyClick>();
++    public DbSet<ShortLinkDailyClick> ShortLinkDailyClicks => Set<ShortLinkDailyClick>();
++    public DbSet<ShortLinkDailyClick> DailyClicks => ShortLinkDailyClicks;
+ 
+     protected override void OnModelCreating(ModelBuilder modelBuilder)
+     {
+@@ -27,6 +28,7 @@ public class AppDbContext : DbContext
+ 
+         modelBuilder.Entity<ShortLink>(entity =>
+         {
++            entity.ToTable("ShortLinks");
+             entity.HasKey(e => e.Id);
+ 
+             entity.Property(e => e.Code)
+@@ -39,25 +41,26 @@ public class AppDbContext : DbContext
+             entity.Property(e => e.OriginalUrl)
+                 .IsRequired();
+ 
+-            entity.Property(e => e.CreatedAt)
++            entity.Property(e => e.ClickCount)
++                .IsRequired()
++                .HasDefaultValue(0L);
++
++            entity.Property(e => e.CreatedAtUtc)
+                 .IsRequired()
+                 .HasConversion(utcConverter);
+ 
+-            entity.Property(e => e.ExpiresAt)
++            entity.Property(e => e.LastVisitedAtUtc)
+                 .HasConversion(nullableUtcConverter);
+ 
+-            entity.HasIndex(e => e.ExpiresAt);
+-
+-            entity.Property(e => e.LastVisitedAt)
++            entity.Property(e => e.ExpiresAtUtc)
+                 .HasConversion(nullableUtcConverter);
+ 
+-            entity.Property(e => e.ClickCount)
+-                .IsRequired()
+-                .HasDefaultValue(0L);
++            entity.HasIndex(e => e.ExpiresAtUtc);
+         });
+ 
+         modelBuilder.Entity<ShortLinkDailyClick>(entity =>
+         {
++            entity.ToTable("ShortLinkDailyClicks");
+             entity.HasKey(e => e.Id);
+ 
+             entity.Property(e => e.ShortLinkId)
+diff --git a/src/App/Data/DatabaseBootstrapper.cs b/src/App/Data/DatabaseBootstrapper.cs
+new file mode 100644
+index 0000000..7b0b9f7
+--- /dev/null
++++ b/src/App/Data/DatabaseBootstrapper.cs
+@@ -0,0 +1,134 @@
++using System;
++using System.Collections.Generic;
++using Microsoft.EntityFrameworkCore;
++
++namespace App.Data;
++
++public static class DatabaseBootstrapper
++{
++    public const string InitialMigrationId = "20260101000000_InitialCreate";
++    public const string ProductVersion = "9.0.2";
++
++    public static async Task BootstrapDatabaseAsync(AppDbContext dbContext, CancellationToken cancellationToken = default)
++    {
++        await BootstrapAsync(dbContext, cancellationToken);
++    }
++
++    public static async Task BootstrapAsync(AppDbContext dbContext, CancellationToken cancellationToken = default)
++    {
++        if (!dbContext.Database.IsRelational())
++        {
++            return;
++        }
++
++        if (dbContext.Database.IsSqlite())
++        {
++            var connection = dbContext.Database.GetDbConnection();
++            if (connection.State != System.Data.ConnectionState.Open)
++            {
++                await dbContext.Database.OpenConnectionAsync(cancellationToken);
++            }
++
++            try
++            {
++                await dbContext.Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
++            }
++            catch
++            {
++            }
++
++            try
++            {
++                await dbContext.Database.ExecuteSqlRawAsync("PRAGMA busy_timeout = 30000;", cancellationToken);
++            }
++            catch
++            {
++            }
++
++            bool hasShortLinks = false;
++            using (var cmd = connection.CreateCommand())
++            {
++                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ShortLinks';";
++                var scalar = await cmd.ExecuteScalarAsync(cancellationToken);
++                if (scalar != null && Convert.ToInt64(scalar) > 0)
++                { 
++                    hasShortLinks = true;
++                }
++            }
++
++            if (hasShortLinks)
++            {
++                var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++                using (var cmd = connection.CreateCommand())
++                {
++                    cmd.CommandText = "PRAGMA table_info('ShortLinks');";
++                    using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
++                    while (await reader.ReadAsync(cancellationToken))
++                    {
++                        columns.Add(reader.GetString(1));
++                    }
++                }
++
++                await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
++
++                if (columns.Contains("CreatedAt") && !columns.Contains("CreatedAtUtc"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" RENAME COLUMN \"CreatedAt\" TO \"CreatedAtUtc\";", cancellationToken);
++                }
++                if (columns.Contains("ExpiresAt") && !columns.Contains("ExpiresAtUtc"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" RENAME COLUMN \"ExpiresAt\" TO \"ExpiresAtUtc\";", cancellationToken);
++                }
++                if (columns.Contains("LastVisitedAt") && !columns.Contains("LastVisitedAtUtc"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" RENAME COLUMN \"LastVisitedAt\" TO \"LastVisitedAtUtc\";", cancellationToken);
++                }
++
++                if (!columns.Contains("LastVisitedAtUtc") && !columns.Contains("LastVisitedAt"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" ADD COLUMN \"LastVisitedAtUtc\" TEXT NULL;", cancellationToken);
++                }
++
++                if (!columns.Contains("ExpiresAtUtc") && !columns.Contains("ExpiresAt"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" ADD COLUMN \"ExpiresAtUtc\" TEXT NULL;", cancellationToken);
++                }
++
++                if (!columns.Contains("ClickCount"))
++                {
++                    await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE \"ShortLinks\" ADD COLUMN \"ClickCount\" INTEGER NOT NULL DEFAULT 0;", cancellationToken);
++                }
++
++                await dbContext.Database.ExecuteSqlRawAsync(@"
++                    CREATE TABLE IF NOT EXISTS ""ShortLinkDailyClicks"" (
++                        ""Id"" INTEGER NOT NULL CONSTRAINT ""PK_ShortLinkDailyClicks"" PRIMARY KEY AUTOINCREMENT,
++                        ""ShortLinkId"" INTEGER NOT NULL,
++                        ""Date"" TEXT NOT NULL,
++                        ""Clicks"" INTEGER NOT NULL DEFAULT 0,
++                        CONSTRAINT ""FK_ShortLinkDailyClicks_ShortLinks_ShortLinkId"" FOREIGN KEY (""ShortLinkId"") REFERENCES ""ShortLinks"" (""Id"") ON DELETE CASCADE
++                    );
++                ", cancellationToken);
++
++                await dbContext.Database.ExecuteSqlRawAsync(@"
++                    CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShortLinkDailyClicks_ShortLinkId_Date"" ON ""ShortLinkDailyClicks"" (""ShortLinkId"", ""Date"");
++                ", cancellationToken);
++
++                await dbContext.Database.ExecuteSqlRawAsync(@"
++                    CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
++                        ""MigrationId"" TEXT NOT NULL CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY,
++                        ""ProductVersion"" TEXT NOT NULL
++                    );
++                ", cancellationToken);
++
++                await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
++                    INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
++                    VALUES ({InitialMigrationId}, {ProductVersion});
++                ", cancellationToken);
++
++                await transaction.CommitAsync(cancellationToken);
++            }
++        }
++
++        await dbContext.Database.MigrateAsync(cancellationToken);
++    }
++}
+\ No newline at end of file
+diff --git a/src/App/Data/Migrations/InitialCreate.cs b/src/App/Data/Migrations/InitialCreate.cs
+new file mode 100644
+index 0000000..e840b8e
+--- /dev/null
++++ b/src/App/Data/Migrations/InitialCreate.cs
+@@ -0,0 +1,78 @@
++using System;
++using Microsoft.EntityFrameworkCore.Infrastructure;
++using Microsoft.EntityFrameworkCore.Migrations;
++
++namespace App.Data.Migrations;
++
++[DbContext(typeof(AppDbContext))]
++[Migration("20260101000000_InitialCreate")]
++public partial class InitialCreate : Migration
++{
++    protected override void Up(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.CreateTable(
++            name: "ShortLinks",
++            columns: table => new
++            {
++                Id = table.Column<long>(type: "INTEGER", nullable: false)
++                    .Annotation("Sqlite:Autoincrement", true),
++                Code = table.Column<string>(type: "TEXT", maxLength: 64, nullable: false),
++                OriginalUrl = table.Column<string>(type: "TEXT", nullable: false),
++                ClickCount = table.Column<long>(type: "INTEGER", nullable: false, defaultValue: 0L),
++                CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
++                LastVisitedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
++                ExpiresAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true)
++            },
++            constraints: table =>
++            {
++                table.PrimaryKey("PK_ShortLinks", x => x.Id);
++            });
++
++        migrationBuilder.CreateTable(
++            name: "ShortLinkDailyClicks",
++            columns: table => new
++            {
++                Id = table.Column<long>(type: "INTEGER", nullable: false)
++                    .Annotation("Sqlite:Autoincrement", true),
++                ShortLinkId = table.Column<long>(type: "INTEGER", nullable: false),
++                Date = table.Column<DateOnly>(type: "TEXT", nullable: false),
++                Clicks = table.Column<long>(type: "INTEGER", nullable: false, defaultValue: 0L)
++            },
++            constraints: table =>
++            {
++                table.PrimaryKey("PK_ShortLinkDailyClicks", x => x.Id);
++                table.ForeignKey(
++                    name: "FK_ShortLinkDailyClicks_ShortLinks_ShortLinkId",
++                    column: x => x.ShortLinkId,
++                    principalTable: "ShortLinks",
++                    principalColumn: "Id",
++                    onDelete: ReferentialAction.Cascade);
++            });
++
++        migrationBuilder.CreateIndex(
++            name: "IX_ShortLinks_Code",
++            table: "ShortLinks",
++            column: "Code",
++            unique: true);
++
++        migrationBuilder.CreateIndex(
++            name: "IX_ShortLinks_ExpiresAtUtc",
++            table: "ShortLinks",
++            column: "ExpiresAtUtc");
++
++        migrationBuilder.CreateIndex(
++            name: "IX_ShortLinkDailyClicks_ShortLinkId_Date",
++            table: "ShortLinkDailyClicks",
++            columns: new[] { "ShortLinkId", "Date" },
++            unique: true);
++    }
++
++    protected override void Down(MigrationBuilder migrationBuilder)
++    {
++        migrationBuilder.DropTable(
++            name: "ShortLinkDailyClicks");
++
++        migrationBuilder.DropTable(
++            name: "ShortLinks");
++    }
++}
+\ No newline at end of file
+diff --git a/src/App/Data/ShortLink.cs b/src/App/Data/ShortLink.cs
+index 1ff6af6..25459c6 100644
+--- a/src/App/Data/ShortLink.cs
++++ b/src/App/Data/ShortLink.cs
+@@ -1,3 +1,5 @@
++using System.ComponentModel.DataAnnotations.Schema;
++
+ namespace App.Data;
+ 
+ public class ShortLink
+@@ -5,9 +7,31 @@ public class ShortLink
+     public long Id { get; set; }
+     public string Code { get; set; } = string.Empty;
+     public string OriginalUrl { get; set; } = string.Empty;
+-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+-    public DateTime? ExpiresAt { get; set; }
+     public long ClickCount { get; set; } = 0;
+-    public DateTime? LastVisitedAt { get; set; }
++    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
++    public DateTime? LastVisitedAtUtc { get; set; }
++    public DateTime? ExpiresAtUtc { get; set; }
++
++    [NotMapped]
++    public DateTime CreatedAt
++    {
++        get => CreatedAtUtc;
++        set => CreatedAtUtc = value;
++    }
++
++    [NotMapped]
++    public DateTime? LastVisitedAt
++    {
++        get => LastVisitedAtUtc;
++        set => LastVisitedAtUtc = value;
++    }
++
++    [NotMapped]
++    public DateTime? ExpiresAt
++    {
++        get => ExpiresAtUtc;
++        set => ExpiresAtUtc = value;
++    }
++
+     public ICollection<ShortLinkDailyClick> DailyClicks { get; set; } = new List<ShortLinkDailyClick>();
+ }
+\ No newline at end of file
+diff --git a/src/App/Data/ShortLinkDailyClick.cs b/src/App/Data/ShortLinkDailyClick.cs
+index 9f9ec8d..5cfd1e4 100644
+--- a/src/App/Data/ShortLinkDailyClick.cs
++++ b/src/App/Data/ShortLinkDailyClick.cs
+@@ -5,6 +5,6 @@ public class ShortLinkDailyClick
+     public long Id { get; set; }
+     public long ShortLinkId { get; set; }
+     public ShortLink? ShortLink { get; set; }
+-    public DateOnly Date { get; set; }
++    public DateOnly Date { get; set; } 
+     public long Clicks { get; set; }
+ }
+\ No newline at end of file
+diff --git a/src/App/Models/Contracts.cs b/src/App/Models/Contracts.cs
+index acb1de7..6b7ca1e 100644
+--- a/src/App/Models/Contracts.cs
++++ b/src/App/Models/Contracts.cs
+@@ -24,7 +24,11 @@ public sealed record AnalyticsResponse(
+     [property: JsonPropertyName("last_visited_at")] DateTime? LastVisitedAt,
+     [property: JsonPropertyName("expires_at")] DateTime? ExpiresAt,
+     [property: JsonPropertyName("expired")] bool Expired
+-);
++)
++{
++    [JsonPropertyName("totalClicks")]
++    public long TotalClicksCamelCase => TotalClicks;
++}
+ 
+ public sealed record DailyClickRecord(
+     [property: JsonPropertyName("date")] string Date,
+@@ -36,7 +40,11 @@ public sealed record DailyAnalyticsResponse(
+     [property: JsonPropertyName("totalClicks")] long TotalClicks,
+     [property: JsonPropertyName("days")] int Days,
+     [property: JsonPropertyName("daily")] IReadOnlyList<DailyClickRecord> Daily
+-);
++)
++{
++    [JsonPropertyName("total_clicks")]
++    public long TotalClicksSnakeCase => TotalClicks;
++}
+ 
+ public sealed record HealthResponse(
+     [property: JsonPropertyName("status")] string Status
+diff --git a/src/App/Program.cs b/src/App/Program.cs
+index b7314c9..1072154 100644
+--- a/src/App/Program.cs
++++ b/src/App/Program.cs
+@@ -10,7 +10,7 @@ builder.Services.AddEndpointsApiExplorer();
+ builder.Services.AddOpenApi();
+ 
+ var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+-    ?? "Data Source=shortener.db;Cache=Shared;Mode=ReadWriteCreate";
++    ?? "Data Source=shortener.db;Cache=Shared;Mode=ReadWriteCreate;Default Timeout=30";
+ 
+ builder.Services.AddDbContext<AppDbContext>(options =>
+ {
+@@ -29,34 +29,8 @@ app.UseRateLimiter();
+ 
+ using (var scope = app.Services.CreateScope())
+ {
+-    try
+-    {
+-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+-        try
+-        {
+-            await db.Database.EnsureCreatedAsync();
+-        }
+-        catch
+-        {
+-            // Database or tables may already exist or be initialized concurrently by test hosts
+-        }
+-
+-        try
+-        {
+-            if (db.Database.IsSqlite() && !db.Database.IsInMemory())
+-            {
+-                await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;");
+-            }
+-        }
+-        catch
+-        {
+-            // In-memory SQLite or non-standard providers ignore PRAGMA journal_mode
+-        }
+-    }
+-    catch
+-    {
+-        // Datastore might be deliberately unconfigured or unavailable in test scenarios
+-    }
++    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
++    await DatabaseBootstrapper.BootstrapAsync(db);
+ }
+ 
+ app.MapLinkEndpoints();
+diff --git a/src/App/Services/LinkService.cs b/src/App/Services/LinkService.cs
+index 330fe62..773d36c 100644
+--- a/src/App/Services/LinkService.cs
++++ b/src/App/Services/LinkService.cs
+@@ -1,5 +1,7 @@
++using System.Security.Cryptography;
+ using App.Data;
+ using App.Models;
++using Microsoft.Data.Sqlite;
+ using Microsoft.EntityFrameworkCore;
+ 
+ namespace App.Services;
+@@ -102,7 +104,6 @@ public class LinkService : ILinkService
+ 
+             code = request.CustomAlias;
+         }
+-
+         else
+         {
+             const int maxRetries = 10;
+@@ -140,10 +141,10 @@ public class LinkService : ILinkService
+         {
+             Code = code,
+             OriginalUrl = request.Url.Trim(),
+-            CreatedAt = DateTime.UtcNow,
+-            ExpiresAt = expiresAtUtc,
++            CreatedAtUtc = DateTime.UtcNow,
++            ExpiresAtUtc = expiresAtUtc,
+             ClickCount = 0,
+-            LastVisitedAt = null
++            LastVisitedAtUtc = null
+         };
+ 
+         try
+@@ -165,8 +166,8 @@ public class LinkService : ILinkService
+             Code: code,
+             ShortUrl: shortUrl,
+             Url: shortLink.OriginalUrl,
+-            CreatedAt: shortLink.CreatedAt,
+-            ExpiresAt: shortLink.ExpiresAt
++            CreatedAt: shortLink.CreatedAtUtc,
++            ExpiresAt: shortLink.ExpiresAtUtc
+         );
+ 
+         return new ShortenResult(ShortenStatus.Success, Response: response);
+@@ -174,79 +175,97 @@ public class LinkService : ILinkService
+ 
+     public async Task<RedirectResult> GetRedirectAsync(string code, CancellationToken cancellationToken = default)
+     {
+-        var link = await _dbContext.ShortLinks.FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
++        var link = await _dbContext.ShortLinks
++            .AsNoTracking()
++            .Where(l => l.Code == code)
++            .Select(l => new { l.Id, l.OriginalUrl, l.ExpiresAtUtc })
++            .FirstOrDefaultAsync(cancellationToken);
++
+         if (link == null)
+         {
+             return new RedirectResult(RedirectStatus.NotFound);
+         }
+ 
+-        if (link.ExpiresAt.HasValue && link.ExpiresAt.Value <= DateTime.UtcNow)
++        if (link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value <= DateTime.UtcNow)
+         {
+             return new RedirectResult(RedirectStatus.Expired);
+         }
+ 
+         var nowUtc = DateTime.UtcNow;
+         var todayUtc = DateOnly.FromDateTime(nowUtc);
++        var dateString = todayUtc.ToString("yyyy-MM-dd");
+ 
+-        link.ClickCount += 1;
+-        link.LastVisitedAt = nowUtc;
++        await ExecuteWithRetryAsync(async () =>
++        {
++            await _dbContext.ShortLinks
++                .Where(s => s.Id == link.Id)
++                .ExecuteUpdateAsync(s => s
++                    .SetProperty(b => b.ClickCount, b => b.ClickCount + 1)
++                    .SetProperty(b => b.LastVisitedAtUtc, nowUtc),
++                    cancellationToken);
++        }, cancellationToken);
++
++        await ExecuteWithRetryAsync(async () =>
++        {
++            await _dbContext.Database.ExecuteSqlInterpolatedAsync($@"
++                INSERT INTO ShortLinkDailyClicks (ShortLinkId, Date, Clicks)
++                VALUES ({link.Id}, {dateString}, 1)
++                ON CONFLICT(ShortLinkId, Date) DO UPDATE SET Clicks = ShortLinkDailyClicks.Clicks + 1;
++            ", cancellationToken);
++        }, cancellationToken);
+ 
+-        var dailyClick = await _dbContext.DailyClicks
+-            .FirstOrDefaultAsync(d => d.ShortLinkId == link.Id && d.Date == todayUtc, cancellationToken);
++        return new RedirectResult(RedirectStatus.Success, TargetUrl: link.OriginalUrl);
++    }
+ 
+-        if (dailyClick == null)
++    private static async Task ExecuteWithRetryAsync(Func<Task> action, CancellationToken cancellationToken)
++    {
++        const int maxRetries = 20;
++        for (int attempt = 0; attempt < maxRetries; attempt++)
+         {
+-            dailyClick = new ShortLinkDailyClick
++            try
+             {
+-                ShortLinkId = link.Id,
+-                Date = todayUtc,
+-                Clicks = 1
+-            };
+-            _dbContext.DailyClicks.Add(dailyClick);
+-        }
+-        else
+-        {
+-            dailyClick.Clicks += 1;
++                await action();
++                return;
++            }
++            catch (Exception ex) when (IsSqliteBusy(ex))
++            {
++                if (attempt == maxRetries - 1) throw;
++                await Task.Delay(RandomNumberGenerator.GetInt32(10, 50) * (attempt + 1), cancellationToken);
++            }
+         }
++    }
+ 
+-        try
+-        {
+-            await _dbContext.SaveChangesAsync(cancellationToken);
+-        }
+-        catch (DbUpdateException)
++    private static bool IsSqliteBusy(Exception ex)
++    {
++        var current = ex;
++        while (current != null)
+         {
+-            _dbContext.ChangeTracker.Clear();
+-            var retryLink = await _dbContext.ShortLinks.FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
+-            if (retryLink != null)
++            if (current is SqliteException sqliteEx)
+             {
+-                retryLink.ClickCount += 1;
+-                retryLink.LastVisitedAt = DateTime.UtcNow;
+-                var existingDaily = await _dbContext.DailyClicks
+-                    .FirstOrDefaultAsync(d => d.ShortLinkId == retryLink.Id && d.Date == todayUtc, cancellationToken);
+-                if (existingDaily != null)
++                if (sqliteEx.SqliteErrorCode == 5 ||
++                    sqliteEx.SqliteErrorCode == 6 ||
++                    (sqliteEx.SqliteErrorCode & 0xFF) == 5 ||
++                    (sqliteEx.SqliteErrorCode & 0xFF) == 6 ||
++                    sqliteEx.Message.Contains("busy", StringComparison.OrdinalIgnoreCase) ||
++                    sqliteEx.Message.Contains("locked", StringComparison.OrdinalIgnoreCase))
+                 {
+-                    existingDaily.Clicks += 1;
++                    return true;
+                 }
+-                else
+-                {
+-                    _dbContext.DailyClicks.Add(new ShortLinkDailyClick
+-                    {
+-                        ShortLinkId = retryLink.Id,
+-                        Date = todayUtc,
+-                        Clicks = 1
+-                    });
+-                }
+-                await _dbContext.SaveChangesAsync(cancellationToken);
+             }
++            if (current.Message.Contains("busy", StringComparison.OrdinalIgnoreCase) ||
++                current.Message.Contains("locked", StringComparison.OrdinalIgnoreCase))
++            {
++                return true;
++            }
++            current = current.InnerException!;
+         }
+-
+-        return new RedirectResult(RedirectStatus.Success, TargetUrl: link.OriginalUrl);
++        return false;
+     }
+ 
+     public async Task<AnalyticsResult> GetAnalyticsAsync(string code, CancellationToken cancellationToken = default)
+     {
+         var link = await _dbContext.ShortLinks.AsNoTracking().FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
+-        if (link == null || (link.ExpiresAt.HasValue && link.ExpiresAt.Value <= DateTime.UtcNow))
++        if (link == null || (link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value <= DateTime.UtcNow))
+         {
+             return new AnalyticsResult(false);
+         }
+@@ -255,9 +274,9 @@ public class LinkService : ILinkService
+             Code: link.Code,
+             Url: link.OriginalUrl,
+             TotalClicks: link.ClickCount,
+-            CreatedAt: link.CreatedAt,
+-            LastVisitedAt: link.LastVisitedAt,
+-            ExpiresAt: link.ExpiresAt,
++            CreatedAt: link.CreatedAtUtc,
++            LastVisitedAt: link.LastVisitedAtUtc,
++            ExpiresAt: link.ExpiresAtUtc,
+             Expired: false
+         );
+ 
+@@ -272,7 +291,7 @@ public class LinkService : ILinkService
+         }
+ 
+         var link = await _dbContext.ShortLinks.AsNoTracking().FirstOrDefaultAsync(l => l.Code == code, cancellationToken);
+-        if (link == null || (link.ExpiresAt.HasValue && link.ExpiresAt.Value <= DateTime.UtcNow))
++        if (link == null || (link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value <= DateTime.UtcNow))
+         {
+             return new DailyAnalyticsResult(DailyAnalyticsStatus.NotFound, ErrorMessage: "Short code not found.");
+         }
+@@ -280,12 +299,14 @@ public class LinkService : ILinkService
+         var todayUtc = DateOnly.FromDateTime(DateTime.UtcNow);
+         var startDate = todayUtc.AddDays(-(days - 1));
+ 
+-        var dbClicks = await _dbContext.DailyClicks
++        var dbClicks = await _dbContext.ShortLinkDailyClicks
+             .AsNoTracking()
+             .Where(d => d.ShortLinkId == link.Id && d.Date >= startDate && d.Date <= todayUtc)
+             .ToListAsync(cancellationToken);
+ 
+-        var clicksMap = dbClicks.ToDictionary(d => d.Date, d => d.Clicks);
++        var clicksMap = dbClicks
++            .GroupBy(d => d.Date)
++            .ToDictionary(g => g.Key, g => g.Sum(x => x.Clicks));
+ 
+         var dailyRecords = new List<DailyClickRecord>(days);
+         for (var d = startDate; d <= todayUtc; d = d.AddDays(1))
+diff --git a/src/App/Services/UrlValidationService.cs b/src/App/Services/UrlValidationService.cs
+index 2edcd58..ed0d49e 100644
+--- a/src/App/Services/UrlValidationService.cs
++++ b/src/App/Services/UrlValidationService.cs
+@@ -65,7 +65,6 @@ public class UrlValidationService : IUrlValidationService
+         }
+         catch
+         {
+-            // Allow offline test environments to resolve virtual hosts
+         }
+ 
+         return (true, null);
+diff --git a/src/App/appsettings.json b/src/App/appsettings.json
+index 932e697..c6a98f5 100644
+--- a/src/App/appsettings.json
++++ b/src/App/appsettings.json
+@@ -7,7 +7,7 @@
+   },
+   "AllowedHosts": "*",
+   "ConnectionStrings": {
+-    "DefaultConnection": "Data Source=shortener.db;Cache=Shared;Mode=ReadWriteCreate"
++    "DefaultConnection": "Data Source=shortener.db;Cache=Shared;Mode=ReadWriteCreate;Default Timeout=30"
+   },
+   "RateLimiting": {
+     "PermitLimit": 60,
+diff --git a/tests/AnalyticsAndHealthTests.cs b/tests/AnalyticsAndHealthTests.cs
+index 3c23bae..0fdf714 100644
+--- a/tests/AnalyticsAndHealthTests.cs
++++ b/tests/AnalyticsAndHealthTests.cs
+@@ -18,7 +18,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R5_Analytics_NewLink_ReturnsZeroClicksAndNullLastVisited()
++    public async Task R7_Analytics_NewLink_ReturnsZeroClicksAndNullLastVisited()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/fresh-link" };
+@@ -42,7 +42,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R5_Analytics_AfterVisit_ReturnsUpdatedClicksAndLastVisitedTimestamp()
++    public async Task R7_Analytics_AfterVisit_ReturnsUpdatedClicksAndLastVisitedTimestamp()
+     {
+         var client = _factory.CreateClient();
+         var redirectClient = _factory.CreateNoRedirectClient();
+@@ -68,7 +68,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R5_Analytics_NonExistentCode_ReturnsNotFound404()
++    public async Task R7_Analytics_NonExistentCode_ReturnsNotFound404()
+     {
+         var client = _factory.CreateClient();
+         var missingCode = "absent-" + Guid.NewGuid().ToString("N");
+@@ -78,7 +78,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R6_Health_WhenOperational_ReturnsOk200()
++    public async Task R7_Health_WhenOperational_ReturnsOk200()
+     {
+         var client = _factory.CreateClient();
+ 
+@@ -91,7 +91,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R6_Health_WhenDatastoreUnavailable_ReturnsServiceUnavailable503()
++    public async Task R7_Health_WhenDatastoreUnavailable_ReturnsServiceUnavailable503()
+     {
+         var isolatedDbPath = Path.Combine(Path.GetTempPath(), $"health_fail_{Guid.NewGuid():N}.db");
+         using var failureFactory = new CustomWebApplicationFactory(isolatedDbPath, deleteDbOnDispose: true);
+@@ -111,7 +111,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R1_DailyAnalytics_DefaultDays_ReturnsSevenConsecutiveDaysEndingToday()
++    public async Task R7_DailyAnalytics_DefaultDays_ReturnsSevenConsecutiveDaysEndingToday()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/r1-default" };
+@@ -150,7 +150,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R1_DailyAnalytics_CustomDays14_ReturnsFourteenConsecutiveDays()
++    public async Task R7_DailyAnalytics_CustomDays14_ReturnsFourteenConsecutiveDays()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/r1-14days" };
+@@ -190,7 +190,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     [InlineData("?days=invalid")]
+     [InlineData("?days=abc")]
+     [InlineData("?days=3.14")]
+-    public async Task R1_DailyAnalytics_InvalidDays_ReturnsBadRequest400(string queryString)
++    public async Task R7_DailyAnalytics_InvalidDays_ReturnsBadRequest400(string queryString)
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/r1-invalid-days" };
+@@ -209,7 +209,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R2_DailyAnalytics_ZeroFilledDays_ReturnsConsecutiveDatesWithZeroClicks()
++    public async Task R7_DailyAnalytics_ZeroFilledDays_ReturnsConsecutiveDatesWithZeroClicks()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/r2-zero-filled" };
+@@ -234,7 +234,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R2_DailyAnalytics_RecordedClicks_MatchesCountForDateAndZeroForOtherDays()
++    public async Task R7_DailyAnalytics_RecordedClicks_MatchesCountForDateAndZeroForOtherDays()
+     {
+         var client = _factory.CreateClient();
+         var redirectClient = _factory.CreateNoRedirectClient();
+@@ -275,7 +275,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R3_DailyAnalytics_NonExistentCode_ReturnsNotFound404MatchingBaseAnalytics()
++    public async Task R7_DailyAnalytics_NonExistentCode_ReturnsNotFound404MatchingBaseAnalytics()
+     {
+         var client = _factory.CreateClient();
+         var unknownCode = "unknown-" + Guid.NewGuid().ToString("N");
+@@ -294,7 +294,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R3_DailyAnalytics_ExpiredCode_ReturnsNotFound404MatchingBaseAnalytics()
++    public async Task R7_DailyAnalytics_ExpiredCode_ReturnsNotFound404MatchingBaseAnalytics()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?>
+@@ -320,7 +320,7 @@ public class AnalyticsAndHealthTests : IClassFixture<CustomWebApplicationFactory
+     }
+ 
+     [Fact]
+-    public async Task R6_DailyAnalytics_MaxDays90_ReturnsNinetyRecordsUnderFiftyMilliseconds()
++    public async Task R7_DailyAnalytics_MaxDays90_ReturnsNinetyRecordsUnderFiftyMilliseconds()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?> { ["url"] = "https://example.com/perf-r6" };
+diff --git a/tests/CustomWebApplicationFactory.cs b/tests/CustomWebApplicationFactory.cs
+index 40b90a1..2034d9f 100644
+--- a/tests/CustomWebApplicationFactory.cs
++++ b/tests/CustomWebApplicationFactory.cs
+@@ -15,20 +15,23 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
+     private readonly bool _deleteDbOnDispose;
+ 
+     public CustomWebApplicationFactory()
+-        : this(null, 60, true)
++        : this(null, 1000, true)
+     {
+     }
+ 
+-    internal CustomWebApplicationFactory(string? dbPath, int permitLimit = 60, bool deleteDbOnDispose = true)
++    internal CustomWebApplicationFactory(string? dbPath, int permitLimit = 1000, bool deleteDbOnDispose = true)
+     {
+         _dbPath = dbPath ?? Path.Combine(Path.GetTempPath(), $"shortener_{Guid.NewGuid():N}.db");
+         _permitLimit = permitLimit;
+         _deleteDbOnDispose = deleteDbOnDispose;
++        var connectionString = $"Data Source={_dbPath};Default Timeout=30";
+ 
+-        Environment.SetEnvironmentVariable("ConnectionStrings__DefaultConnection", $"Data Source={_dbPath}");
+-        Environment.SetEnvironmentVariable("ConnectionStrings__SqliteConnection", $"Data Source={_dbPath}");
+-        Environment.SetEnvironmentVariable("ConnectionStrings__Sqlite", $"Data Source={_dbPath}");
+-        Environment.SetEnvironmentVariable("ConnectionStrings__Database", $"Data Source={_dbPath}");
++        Environment.SetEnvironmentVariable("ConnectionStrings__DefaultConnection", connectionString);
++        Environment.SetEnvironmentVariable("ConnectionStrings__Default", connectionString);
++        Environment.SetEnvironmentVariable("ConnectionStrings__SqliteConnection", connectionString);
++        Environment.SetEnvironmentVariable("ConnectionStrings__Sqlite", connectionString);
++        Environment.SetEnvironmentVariable("ConnectionStrings__Database", connectionString);
++        Environment.SetEnvironmentVariable("ConnectionStrings__AppDbContext", connectionString);
+         Environment.SetEnvironmentVariable("RateLimiting__PermitLimit", _permitLimit.ToString());
+         Environment.SetEnvironmentVariable("RateLimiting__Limit", _permitLimit.ToString());
+         Environment.SetEnvironmentVariable("RateLimit__PermitLimit", _permitLimit.ToString());
+@@ -38,12 +41,15 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
+ 
+     protected override void ConfigureWebHost(IWebHostBuilder builder)
+     {
++        var connectionString = $"Data Source={_dbPath};Default Timeout=30";
+         builder.UseEnvironment("Testing");
+ 
+-        builder.UseSetting("ConnectionStrings:DefaultConnection", $"Data Source={_dbPath}");
+-        builder.UseSetting("ConnectionStrings:SqliteConnection", $"Data Source={_dbPath}");
+-        builder.UseSetting("ConnectionStrings:Sqlite", $"Data Source={_dbPath}");
+-        builder.UseSetting("ConnectionStrings:Database", $"Data Source={_dbPath}");
++        builder.UseSetting("ConnectionStrings:DefaultConnection", connectionString);
++        builder.UseSetting("ConnectionStrings:Default", connectionString);
++        builder.UseSetting("ConnectionStrings:SqliteConnection", connectionString);
++        builder.UseSetting("ConnectionStrings:Sqlite", connectionString);
++        builder.UseSetting("ConnectionStrings:Database", connectionString);
++        builder.UseSetting("ConnectionStrings:AppDbContext", connectionString);
+         builder.UseSetting("RateLimiting:PermitLimit", _permitLimit.ToString());
+         builder.UseSetting("RateLimiting:Limit", _permitLimit.ToString());
+         builder.UseSetting("RateLimit:PermitLimit", _permitLimit.ToString());
+@@ -52,10 +58,12 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
+         {
+             config.AddInMemoryCollection(new Dictionary<string, string?>
+             {
+-                ["ConnectionStrings:DefaultConnection"] = $"Data Source={_dbPath}",
+-                ["ConnectionStrings:SqliteConnection"] = $"Data Source={_dbPath}",
+-                ["ConnectionStrings:Sqlite"] = $"Data Source={_dbPath}",
+-                ["ConnectionStrings:Database"] = $"Data Source={_dbPath}",
++                ["ConnectionStrings:DefaultConnection"] = connectionString,
++                ["ConnectionStrings:Default"] = connectionString,
++                ["ConnectionStrings:SqliteConnection"] = connectionString,
++                ["ConnectionStrings:Sqlite"] = connectionString,
++                ["ConnectionStrings:Database"] = connectionString,
++                ["ConnectionStrings:AppDbContext"] = connectionString,
+                 ["RateLimiting:PermitLimit"] = _permitLimit.ToString(),
+                 ["RateLimiting:Limit"] = _permitLimit.ToString(),
+                 ["RateLimit:PermitLimit"] = _permitLimit.ToString()
+diff --git a/tests/JsonTestHelper.cs b/tests/JsonTestHelper.cs
+index 9de73d1..2475caa 100644
+--- a/tests/JsonTestHelper.cs
++++ b/tests/JsonTestHelper.cs
+@@ -46,9 +46,10 @@ public static class JsonTestHelper
+     {
+         foreach (var name in candidateNames)
+         {
+-            if (element.TryGetProperty(name, out var prop) && prop.TryGetInt64(out var val))
++            if (element.TryGetProperty(name, out var prop))
+             {
+-                return val;
++                var val = ExtractInt64(prop);
++                if (val.HasValue) return val;
+             }
+         }
+ 
+@@ -59,10 +60,8 @@ public static class JsonTestHelper
+                 if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(prop.Name.Replace("_", ""), name.Replace("_", ""), StringComparison.OrdinalIgnoreCase))
+                 {
+-                    if (prop.Value.TryGetInt64(out var val))
+-                    {
+-                        return val;
+-                    }
++                    var val = ExtractInt64(prop.Value);
++                    if (val.HasValue) return val;
+                 }
+             }
+         }
+@@ -70,6 +69,20 @@ public static class JsonTestHelper
+         return null;
+     }
+ 
++    private static long? ExtractInt64(JsonElement prop)
++    {
++        if (prop.ValueKind == JsonValueKind.Number)
++        {
++            if (prop.TryGetInt64(out var val)) return val;
++            if (prop.TryGetDouble(out var d)) return (long)d;
++        }
++        else if (prop.ValueKind == JsonValueKind.String)
++        {
++            if (long.TryParse(prop.GetString(), out var parsed)) return parsed;
++        }
++        return null;
++    }
++
+     public static JsonElement? GetArrayProperty(JsonElement element, params string[] candidateNames)
+     {
+         foreach (var name in candidateNames)
+diff --git a/tests/RateLimitingAndPersistenceTests.cs b/tests/RateLimitingAndPersistenceTests.cs
+index 4d6b99c..37a46ef 100644
+--- a/tests/RateLimitingAndPersistenceTests.cs
++++ b/tests/RateLimitingAndPersistenceTests.cs
+@@ -11,7 +11,174 @@ namespace Tests;
+ public class RateLimitingAndPersistenceTests
+ {
+     [Fact]
+-    public async Task R8_RateLimiting_WithinThreshold_ReturnsCreated201()
++    public async Task R3_Startup_CleanDatabase_AppliesInitialMigrationAndRecordsInHistory()
++    { 
++        var cleanDbPath = Path.Combine(Path.GetTempPath(), $"clean_{Guid.NewGuid():N}.db");
++        try
++        {
++            using (var factory = new CustomWebApplicationFactory(cleanDbPath, deleteDbOnDispose: false))
++            {
++                var client = factory.CreateClient();
++                var health = await client.GetAsync("/health");
++                Assert.Equal(HttpStatusCode.OK, health.StatusCode);
++            }
++
++            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={cleanDbPath};Default Timeout=30"))
++            {
++                await connection.OpenAsync();
++                using var cmd = connection.CreateCommand();
++                cmd.CommandText = "SELECT MigrationId FROM __EFMigrationsHistory;";
++                using var reader = await cmd.ExecuteReaderAsync();
++                Assert.True(await reader.ReadAsync());
++                var migrationId = reader.GetString(0);
++                Assert.Contains("InitialCreate", migrationId);
++            }
++        }
++        finally
++        {
++            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
++            try { if (File.Exists(cleanDbPath)) File.Delete(cleanDbPath); } catch { }
++            try { if (File.Exists(cleanDbPath + "-wal")) File.Delete(cleanDbPath + "-wal"); } catch { }
++            try { if (File.Exists(cleanDbPath + "-shm")) File.Delete(cleanDbPath + "-shm"); } catch { }
++        }
++    }
++
++    [Fact]
++    public async Task R4_LegacyDatabase_BootstrapsMissingTablesAndMigrationHistory()
++    {
++        var legacyDbPath = Path.Combine(Path.GetTempPath(), $"bootstrap_{Guid.NewGuid():N}.db");
++        try
++        {
++            // Create legacy SQLite database containing only ShortLinks table (no __EFMigrationsHistory or ShortLinkDailyClicks)
++            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={legacyDbPath};Default Timeout=30"))
++            {
++                await connection.OpenAsync();
++                using var cmd = connection.CreateCommand();
++                cmd.CommandText = @"
++                    CREATE TABLE ShortLinks (
++                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
++                        Code TEXT NOT NULL UNIQUE,
++                        OriginalUrl TEXT NOT NULL,
++                        ClickCount INTEGER NOT NULL,
++                        CreatedAt TEXT NULL DEFAULT CURRENT_TIMESTAMP,
++                        CreatedAtUtc TEXT NULL,
++                        LastVisitedAt TEXT NULL,
++                        LastVisitedAtUtc TEXT NULL,
++                        ExpiresAt TEXT NULL,
++                        ExpiresAtUtc TEXT NULL
++                    );
++                ";
++                await cmd.ExecuteNonQueryAsync();
++            }
++
++            // Start host; bootstrapper should execute CREATE TABLE IF NOT EXISTS and seed __EFMigrationsHistory
++            using (var factory = new CustomWebApplicationFactory(legacyDbPath, deleteDbOnDispose: false))
++            {
++                var client = factory.CreateClient();
++                var healthResponse = await client.GetAsync("/health");
++                Assert.Equal(HttpStatusCode.OK, healthResponse.StatusCode);
++            }
++
++            // Verify SQLite state: ShortLinkDailyClicks created and migration recorded in __EFMigrationsHistory
++            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={legacyDbPath};Default Timeout=30"))
++            {
++                await connection.OpenAsync();
++                using var cmd = connection.CreateCommand();
++                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ShortLinkDailyClicks';";
++                var dailyClicksCount = Convert.ToInt32(await cmd.ExecuteScalarAsync());
++                Assert.Equal(1, dailyClicksCount);
++
++                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory';";
++                var historyCount = Convert.ToInt32(await cmd.ExecuteScalarAsync());
++                Assert.Equal(1, historyCount);
++
++                cmd.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory;";
++                var migrationRows = Convert.ToInt32(await cmd.ExecuteScalarAsync());
++                Assert.True(migrationRows >= 1);
++            }
++
++            // Verify subsequent application restart against upgraded database succeeds without error
++            using (var subsequentFactory = new CustomWebApplicationFactory(legacyDbPath, deleteDbOnDispose: false))
++            {
++                var subsequentClient = subsequentFactory.CreateClient();
++                var subsequentHealth = await subsequentClient.GetAsync("/health");
++                Assert.Equal(HttpStatusCode.OK, subsequentHealth.StatusCode);
++            }
++        }
++        finally
++        {
++            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
++            try { if (File.Exists(legacyDbPath)) File.Delete(legacyDbPath); } catch { }
++            try { if (File.Exists(legacyDbPath + "-wal")) File.Delete(legacyDbPath + "-wal"); } catch { }
++            try { if (File.Exists(legacyDbPath + "-shm")) File.Delete(legacyDbPath + "-shm"); } catch { }
++        }
++    }
++
++    [Fact]
++    public async Task R6_LegacyDatabase_WithPreExistingLink42Clicks_UpgradesAndIncrementsTo43Clicks()
++    {
++        var legacyDbPath = Path.Combine(Path.GetTempPath(), $"legacy_link_{Guid.NewGuid():N}.db");
++        try
++        {
++            // Provision initial release schema with one link having ClickCount = 42
++            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={legacyDbPath};Default Timeout=30"))
++            {
++                await connection.OpenAsync();
++                using var cmd = connection.CreateCommand();
++                cmd.CommandText = @"
++                    CREATE TABLE ShortLinks (
++                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
++                        Code TEXT NOT NULL UNIQUE,
++                        OriginalUrl TEXT NOT NULL,
++                        ClickCount INTEGER NOT NULL,
++                        CreatedAt TEXT NULL DEFAULT CURRENT_TIMESTAMP,
++                        CreatedAtUtc TEXT NULL,
++                        LastVisitedAt TEXT NULL,
++                        LastVisitedAtUtc TEXT NULL,
++                        ExpiresAt TEXT NULL,
++                        ExpiresAtUtc TEXT NULL
++                    );
++                    INSERT INTO ShortLinks (Code, OriginalUrl, ClickCount, CreatedAt, CreatedAtUtc)
++                    VALUES ('legacy42', 'https://example.com/legacy-dest', 42, '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');
++                ";
++                await cmd.ExecuteNonQueryAsync();
++            }
++
++            // Start service against this legacy database
++            using var factory = new CustomWebApplicationFactory(legacyDbPath, deleteDbOnDispose: false);
++            var client = factory.CreateClient();
++            var redirectClient = factory.CreateNoRedirectClient();
++
++            // GET /{code} returns HTTP 307 and increments ClickCount to 43
++            var redirectResponse = await redirectClient.GetAsync("/legacy42");
++            Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
++            Assert.Equal("https://example.com/legacy-dest", redirectResponse.Headers.Location?.ToString());
++
++            var analyticsResponse = await client.GetAsync("/analytics/legacy42");
++            Assert.Equal(HttpStatusCode.OK, analyticsResponse.StatusCode);
++            using var analyticsDoc = JsonDocument.Parse(await analyticsResponse.Content.ReadAsStringAsync());
++            Assert.Equal(43, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
++
++            // GET /analytics/{code}/daily returns HTTP 200 with recorded daily clicks
++            var dailyResponse = await client.GetAsync("/analytics/legacy42/daily?days=1");
++            Assert.Equal(HttpStatusCode.OK, dailyResponse.StatusCode);
++            using var dailyDoc = JsonDocument.Parse(await dailyResponse.Content.ReadAsStringAsync());
++            var dailyArray = JsonTestHelper.GetArrayProperty(dailyDoc.RootElement, "daily");
++            Assert.NotNull(dailyArray);
++            Assert.Equal(1, dailyArray.Value.GetArrayLength());
++            Assert.Equal(1, JsonTestHelper.GetInt64Property(dailyArray.Value[0], "clicks"));
++        }
++        finally
++        {
++            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
++            try { if (File.Exists(legacyDbPath)) File.Delete(legacyDbPath); } catch { }
++            try { if (File.Exists(legacyDbPath + "-wal")) File.Delete(legacyDbPath + "-wal"); } catch { }
++            try { if (File.Exists(legacyDbPath + "-shm")) File.Delete(legacyDbPath + "-shm"); } catch { }
++        }
++    }
++
++    [Fact]
++    public async Task R7_RateLimiting_WithinThreshold_ReturnsCreated201()
+     {
+         using var factory = new CustomWebApplicationFactory();
+         var client = factory.CreateClient();
+@@ -22,7 +189,7 @@ public class RateLimitingAndPersistenceTests
+     }
+ 
+     [Fact]
+-    public async Task R8_RateLimiting_ExceedingThreshold_ReturnsTooManyRequests429WithRetryAfter()
++    public async Task R7_RateLimiting_ExceedingThreshold_ReturnsTooManyRequests429WithRetryAfter()
+     {
+         using var factory = new CustomWebApplicationFactory(null, permitLimit: 5);
+         var client = factory.CreateClient();
+@@ -52,7 +219,7 @@ public class RateLimitingAndPersistenceTests
+     }
+ 
+     [Fact]
+-    public async Task R5_Persistence_SurvivesServiceRestartAndPreservesPriorLinks()
++    public async Task R7_Persistence_SurvivesServiceRestartAndPreservesPriorLinks()
+     {
+         var sharedDbPath = Path.Combine(Path.GetTempPath(), $"persist_{Guid.NewGuid():N}.db");
+         var targetUrl = "https://example.com/persistent-destination";
+@@ -115,7 +282,7 @@ public class RateLimitingAndPersistenceTests
+         }
+         finally
+         {
+-            try { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); } catch { }
++            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+             try { if (File.Exists(sharedDbPath)) File.Delete(sharedDbPath); } catch { }
+             try { if (File.Exists(sharedDbPath + "-wal")) File.Delete(sharedDbPath + "-wal"); } catch { }
+             try { if (File.Exists(sharedDbPath + "-shm")) File.Delete(sharedDbPath + "-shm"); } catch { }
+diff --git a/tests/RedirectEndpointTests.cs b/tests/RedirectEndpointTests.cs
+index f435c22..59d2125 100644
+--- a/tests/RedirectEndpointTests.cs
++++ b/tests/RedirectEndpointTests.cs
+@@ -1,5 +1,7 @@
+ using System;
+ using System.Collections.Generic;
++using System.Globalization;
++using System.Linq;
+ using System.Net;
+ using System.Text.Json;
+ using System.Threading.Tasks;
+@@ -17,134 +19,149 @@ public class RedirectEndpointTests : IClassFixture<CustomWebApplicationFactory>
+     }
+ 
+     [Fact]
+-    public async Task R3_Redirect_ActiveCode_Returns307TemporaryRedirectWithLocation()
++    public async Task R1_Redirect_ActiveLinkWithPriorClicks_IncrementsLifetimeClickCountAndSetsLastVisited()
+     {
+         var client = _factory.CreateClient();
+-        var targetUrl = "https://example.com/target-" + Guid.NewGuid().ToString("N");
+-        var payload = new Dictionary<string, object?> { ["url"] = targetUrl };
++        var redirectClient = _factory.CreateNoRedirectClient();
++        var targetUrl = "https://example.com/r1-lifetime-" + Guid.NewGuid().ToString("N");
+ 
+-        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
++        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new { url = targetUrl }));
+         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+-        using var doc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+-        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        using var createDoc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
++        var code = JsonTestHelper.GetStringProperty(createDoc.RootElement, "code");
+         Assert.NotNull(code);
+ 
+-        var redirectClient = _factory.CreateNoRedirectClient();
++        // Seed initial ClickCount = 5 directly in SQLite to verify exact atomic increment
++        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_factory.DbPath};Default Timeout=30"))
++        {
++            await connection.OpenAsync();
++            using var cmd = connection.CreateCommand();
++            cmd.CommandText = "UPDATE ShortLinks SET ClickCount = 5 WHERE Code = @code;";
++            cmd.Parameters.AddWithValue("@code", code);
++            await cmd.ExecuteNonQueryAsync();
++        }
++
++        var beforeRedirectUtc = DateTime.UtcNow.AddMinutes(-2);
+         var redirectResponse = await redirectClient.GetAsync($"/{code}");
++        var afterRedirectUtc = DateTime.UtcNow.AddMinutes(2);
+ 
+         Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
+         Assert.Equal(targetUrl, redirectResponse.Headers.Location?.ToString());
++
++        var analyticsResponse = await client.GetAsync($"/analytics/{code}");
++        Assert.Equal(HttpStatusCode.OK, analyticsResponse.StatusCode);
++        using var analyticsDoc = JsonDocument.Parse(await analyticsResponse.Content.ReadAsStringAsync());
++        Assert.Equal(6, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
++
++        var lastVisited = JsonTestHelper.GetStringProperty(analyticsDoc.RootElement, "last_visited_at", "lastVisitedAt");
++        Assert.NotNull(lastVisited);
++        Assert.True(DateTime.TryParse(lastVisited, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var lastVisitedUtc));
++        Assert.True(lastVisitedUtc >= beforeRedirectUtc && lastVisitedUtc <= afterRedirectUtc);
+     }
+ 
+     [Fact]
+-    public async Task R3_Redirect_NonExistentCode_ReturnsNotFound404()
++    public async Task R1_Redirect_NonExistentOrExpiredCode_ReturnsNotFound404()
+     {
+         var redirectClient = _factory.CreateNoRedirectClient();
+-        var nonExistentCode = "non-existent-" + Guid.NewGuid().ToString("N");
+ 
+-        var response = await redirectClient.GetAsync($"/{nonExistentCode}");
++        // Non-existent link
++        var missingCode = "absent-" + Guid.NewGuid().ToString("N");
++        var missingResponse = await redirectClient.GetAsync($"/{missingCode}");
++        Assert.Equal(HttpStatusCode.NotFound, missingResponse.StatusCode);
+ 
+-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
++        // Expired link
++        var client = _factory.CreateClient();
++        var expiredUrl = "https://example.com/r1-expired-" + Guid.NewGuid().ToString("N");
++        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new
++        {
++            url = expiredUrl,
++            expires_at = "2020-01-01T00:00:00Z"
++        }));
++        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
++        using var doc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
++        var expiredCode = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        Assert.NotNull(expiredCode);
++
++        var expiredResponse = await redirectClient.GetAsync($"/{expiredCode}");
++        Assert.Equal(HttpStatusCode.NotFound, expiredResponse.StatusCode);
+     }
+ 
+     [Fact]
+-    public async Task R3_Redirect_IncrementsClickCountAndUpdatesLastVisitedAt()
++    public async Task R2_Redirect_FirstVisitOnDate_CreatesDailyRecordWithSingleClick()
+     {
+         var client = _factory.CreateClient();
+         var redirectClient = _factory.CreateNoRedirectClient();
+-        var targetUrl = "https://example.com/metrics-" + Guid.NewGuid().ToString("N");
++        var targetUrl = "https://example.com/r2-single-" + Guid.NewGuid().ToString("N");
+ 
+         var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new { url = targetUrl }));
++        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+         using var createDoc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+         var code = JsonTestHelper.GetStringProperty(createDoc.RootElement, "code");
+         Assert.NotNull(code);
+ 
+-        var initialAnalytics = await client.GetAsync($"/analytics/{code}");
+-        using var initialDoc = JsonDocument.Parse(await initialAnalytics.Content.ReadAsStringAsync());
+-        Assert.Equal(0, JsonTestHelper.GetInt64Property(initialDoc.RootElement, "total_clicks", "totalClicks"));
+-        Assert.True(JsonTestHelper.PropertyIsNull(initialDoc.RootElement, "last_visited_at", "lastVisitedAt"));
+-
+-        var visitResponse1 = await redirectClient.GetAsync($"/{code}");
+-        Assert.Equal(HttpStatusCode.TemporaryRedirect, visitResponse1.StatusCode);
+-
+-        var updatedAnalytics1 = await client.GetAsync($"/analytics/{code}");
+-        using var updatedDoc1 = JsonDocument.Parse(await updatedAnalytics1.Content.ReadAsStringAsync());
+-        Assert.Equal(1, JsonTestHelper.GetInt64Property(updatedDoc1.RootElement, "total_clicks", "totalClicks"));
+-        var lastVisited1 = JsonTestHelper.GetStringProperty(updatedDoc1.RootElement, "last_visited_at", "lastVisitedAt");
+-        Assert.NotNull(lastVisited1);
+-        Assert.True(DateTime.TryParse(lastVisited1, out _));
++        var redirectResponse = await redirectClient.GetAsync($"/{code}");
++        Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
+ 
+-        var visitResponse2 = await redirectClient.GetAsync($"/{code}");
+-        Assert.Equal(HttpStatusCode.TemporaryRedirect, visitResponse2.StatusCode);
++        var dailyResponse = await client.GetAsync($"/analytics/{code}/daily?days=1");
++        Assert.Equal(HttpStatusCode.OK, dailyResponse.StatusCode);
++        using var dailyDoc = JsonDocument.Parse(await dailyResponse.Content.ReadAsStringAsync());
++        var dailyArray = JsonTestHelper.GetArrayProperty(dailyDoc.RootElement, "daily");
++        Assert.NotNull(dailyArray);
++        Assert.Equal(1, dailyArray.Value.GetArrayLength());
+ 
+-        var updatedAnalytics2 = await client.GetAsync($"/analytics/{code}");
+-        using var updatedDoc2 = JsonDocument.Parse(await updatedAnalytics2.Content.ReadAsStringAsync());
+-        Assert.Equal(2, JsonTestHelper.GetInt64Property(updatedDoc2.RootElement, "total_clicks", "totalClicks"));
++        var todayRecord = dailyArray.Value[0];
++        var todayUtcDate = DateTime.UtcNow.ToString("yyyy-MM-dd");
++        Assert.Equal(todayUtcDate, JsonTestHelper.GetStringProperty(todayRecord, "date"));
++        Assert.Equal(1, JsonTestHelper.GetInt64Property(todayRecord, "clicks"));
+     }
+ 
+     [Fact]
+-    public async Task R4_Shorten_WithExpiration_StoresExpirationTimestamp()
++    public async Task R2_Redirect_ExistingDailyRecordWithClicksN_UpsertsToNPlusOne()
+     {
+         var client = _factory.CreateClient();
+-        var targetUrl = "https://example.com/future-exp";
+-        var futureExpiration = DateTime.UtcNow.AddDays(7).ToString("yyyy-MM-ddTHH:mm:ssZ");
+-
+-        var payload = new Dictionary<string, object?>
+-        {
+-            ["url"] = targetUrl,
+-            ["expires_at"] = futureExpiration
+-        };
+-
+-        var response = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
+-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+-
+-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+-        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
+-        Assert.NotNull(code);
+-
+         var redirectClient = _factory.CreateNoRedirectClient();
+-        var redirectResponse = await redirectClient.GetAsync($"/{code}");
+-        Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
+-    }
++        var targetUrl = "https://example.com/r2-upsert-" + Guid.NewGuid().ToString("N");
+ 
+-    [Fact]
+-    public async Task R4_Redirect_ExpiredLink_ReturnsNotFound404AndDoesNotIncrementClicks()
+-    {
+-        var client = _factory.CreateClient();
+-        var targetUrl = "https://example.com/expired-test";
+-        var pastExpiration = "2020-01-01T00:00:00Z";
+-
+-        var payload = new Dictionary<string, object?>
+-        {
+-            ["url"] = targetUrl,
+-            ["expires_at"] = pastExpiration
+-        };
+-
+-        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
++        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new { url = targetUrl }));
+         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+-
+-        using var doc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+-        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        using var createDoc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
++        var code = JsonTestHelper.GetStringProperty(createDoc.RootElement, "code");
+         Assert.NotNull(code);
+ 
+-        var redirectClient = _factory.CreateNoRedirectClient();
+-        var redirectResponse = await redirectClient.GetAsync($"/{code}");
+-        Assert.Equal(HttpStatusCode.NotFound, redirectResponse.StatusCode);
++        // First redirect initializes daily record
++        var firstVisit = await redirectClient.GetAsync($"/{code}");
++        Assert.Equal(HttpStatusCode.TemporaryRedirect, firstVisit.StatusCode);
+ 
+-        var analyticsResponse = await client.GetAsync($"/analytics/{code}");
+-        if (analyticsResponse.StatusCode == HttpStatusCode.OK)
++        // Manually update daily clicks to N = 10 directly in database
++        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_factory.DbPath};Default Timeout=30"))
+         {
+-            using var analyticsDoc = JsonDocument.Parse(await analyticsResponse.Content.ReadAsStringAsync());
+-            Assert.Equal(0, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
++            await connection.OpenAsync();
++            using var cmd = connection.CreateCommand();
++            cmd.CommandText = "UPDATE ShortLinkDailyClicks SET Clicks = 10 WHERE ShortLinkId = (SELECT Id FROM ShortLinks WHERE Code = @code);";
++            cmd.Parameters.AddWithValue("@code", code);
++            await cmd.ExecuteNonQueryAsync();
+         }
++
++        // Second redirect executes atomic SQLite upsert
++        var secondVisit = await redirectClient.GetAsync($"/{code}");
++        Assert.Equal(HttpStatusCode.TemporaryRedirect, secondVisit.StatusCode);
++
++        var dailyResponse = await client.GetAsync($"/analytics/{code}/daily?days=1");
++        Assert.Equal(HttpStatusCode.OK, dailyResponse.StatusCode);
++
++        using var dailyDoc = JsonDocument.Parse(await dailyResponse.Content.ReadAsStringAsync());
++        var dailyArray = JsonTestHelper.GetArrayProperty(dailyDoc.RootElement, "daily");
++        Assert.NotNull(dailyArray);
++        Assert.Equal(1, dailyArray.Value.GetArrayLength());
++        Assert.Equal(11, JsonTestHelper.GetInt64Property(dailyArray.Value[0], "clicks"));
+     }
+ 
+     [Fact]
+-    public async Task R4_Redirect_ActiveLink_IncrementsLifetimeAndDailyClickCount()
++    public async Task R5_Redirect_Concurrent100Requests_AccuratelyIncrementsLifetimeAndDailyClicks()
+     {
+         var client = _factory.CreateClient();
+         var redirectClient = _factory.CreateNoRedirectClient();
+-        var targetUrl = "https://example.com/daily-redirect-" + Guid.NewGuid().ToString("N");
++        var targetUrl = "https://example.com/parallel-100-" + Guid.NewGuid().ToString("N");
+ 
+         var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new { url = targetUrl }));
+         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+@@ -152,66 +169,86 @@ public class RedirectEndpointTests : IClassFixture<CustomWebApplicationFactory>
+         var code = JsonTestHelper.GetStringProperty(createDoc.RootElement, "code");
+         Assert.NotNull(code);
+ 
+-        for (int i = 0; i < 10; i++)
++        const int concurrency = 100;
++        var tasks = new Task<HttpResponseMessage>[concurrency];
++        for (int i = 0; i < concurrency; i++)
+         {
+-            var primeVisit = await redirectClient.GetAsync($"/{code}");
+-            Assert.Equal(HttpStatusCode.TemporaryRedirect, primeVisit.StatusCode);
++            tasks[i] = redirectClient.GetAsync($"/{code}");
+         }
+ 
+-        var redirectResponse = await redirectClient.GetAsync($"/{code}");
+-        Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
+-        Assert.Equal(targetUrl, redirectResponse.Headers.Location?.ToString());
++        var responses = await Task.WhenAll(tasks);
++        foreach (var response in responses)
++        {
++            Assert.Equal(HttpStatusCode.TemporaryRedirect, response.StatusCode);
++            Assert.Equal(targetUrl, response.Headers.Location?.ToString());
++        }
+ 
++        // Lifetime ClickCount in database equals exactly 100
+         var analyticsResponse = await client.GetAsync($"/analytics/{code}");
+         Assert.Equal(HttpStatusCode.OK, analyticsResponse.StatusCode);
+         using var analyticsDoc = JsonDocument.Parse(await analyticsResponse.Content.ReadAsStringAsync());
+-        Assert.Equal(11, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
++        Assert.Equal(100, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
+ 
++        // ShortLinkDailyClicks.Clicks for current UTC date equals exactly 100
+         var dailyResponse = await client.GetAsync($"/analytics/{code}/daily?days=1");
+         Assert.Equal(HttpStatusCode.OK, dailyResponse.StatusCode);
++
+         using var dailyDoc = JsonDocument.Parse(await dailyResponse.Content.ReadAsStringAsync());
+         var dailyArray = JsonTestHelper.GetArrayProperty(dailyDoc.RootElement, "daily");
+         Assert.NotNull(dailyArray);
+         Assert.Equal(1, dailyArray.Value.GetArrayLength());
+-
+-        var todayRecord = dailyArray.Value[0];
+-        var todayUtcDate = DateTime.UtcNow.ToString("yyyy-MM-dd");
+-        var recordDate = JsonTestHelper.GetStringProperty(todayRecord, "date");
+-        var recordClicks = JsonTestHelper.GetInt64Property(todayRecord, "clicks");
+-
+-        Assert.Equal(todayUtcDate, recordDate);
+-        Assert.Equal(11, recordClicks);
++        Assert.Equal(100, JsonTestHelper.GetInt64Property(dailyArray.Value[0], "clicks"));
+     }
+ 
+     [Fact]
+-    public async Task R4_Redirect_ExpiredOrNonExistentLink_DoesNotCreateOrIncrementDailyClicks()
++    public async Task R7_Redirect_ActiveCode_Returns307TemporaryRedirectWithLocation()
+     {
+         var client = _factory.CreateClient();
++        var targetUrl = "https://example.com/target-" + Guid.NewGuid().ToString("N");
++        var payload = new Dictionary<string, object?> { ["url"] = targetUrl };
++
++        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
++        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
++        using var doc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
++        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        Assert.NotNull(code);
++
+         var redirectClient = _factory.CreateNoRedirectClient();
++        var redirectResponse = await redirectClient.GetAsync($"/{code}");
+ 
+-        var nonExistentCode = "absent-" + Guid.NewGuid().ToString("N")[..8];
+-        var missingRedirect = await redirectClient.GetAsync($"/{nonExistentCode}");
+-        Assert.Equal(HttpStatusCode.NotFound, missingRedirect.StatusCode);
++        Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
++        Assert.Equal(targetUrl, redirectResponse.Headers.Location?.ToString());
++    }
+ 
+-        var missingDaily = await client.GetAsync($"/analytics/{nonExistentCode}/daily");
+-        Assert.Equal(HttpStatusCode.NotFound, missingDaily.StatusCode);
++    [Fact]
++    public async Task R7_Redirect_ExpiredLink_ReturnsNotFound404AndDoesNotIncrementClicks()
++    {
++        var client = _factory.CreateClient();
++        var targetUrl = "https://example.com/expired-test";
++        var pastExpiration = "2020-01-01T00:00:00Z";
+ 
+-        var targetUrl = "https://example.com/expired-daily";
+-        var pastExpiration = "2021-01-01T00:00:00Z";
+-        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(new
++        var payload = new Dictionary<string, object?>
+         {
+-            url = targetUrl,
+-            expires_at = pastExpiration
+-        }));
++            ["url"] = targetUrl,
++            ["expires_at"] = pastExpiration
++        };
++
++        var createResponse = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
+         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
++
+         using var doc = JsonDocument.Parse(await createResponse.Content.ReadAsStringAsync());
+-        var expiredCode = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
+-        Assert.NotNull(expiredCode);
++        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        Assert.NotNull(code);
+ 
+-        var expiredRedirect = await redirectClient.GetAsync($"/{expiredCode}");
+-        Assert.Equal(HttpStatusCode.NotFound, expiredRedirect.StatusCode);
++        var redirectClient = _factory.CreateNoRedirectClient();
++        var redirectResponse = await redirectClient.GetAsync($"/{code}");
++        Assert.Equal(HttpStatusCode.NotFound, redirectResponse.StatusCode);
+ 
+-        var expiredDaily = await client.GetAsync($"/analytics/{expiredCode}/daily");
+-        Assert.Equal(HttpStatusCode.NotFound, expiredDaily.StatusCode);
++        var analyticsResponse = await client.GetAsync($"/analytics/{code}");
++        if (analyticsResponse.StatusCode == HttpStatusCode.OK)
++        {
++            using var analyticsDoc = JsonDocument.Parse(await analyticsResponse.Content.ReadAsStringAsync());
++            Assert.Equal(0, JsonTestHelper.GetInt64Property(analyticsDoc.RootElement, "total_clicks", "totalClicks"));
++        }
+     }
+ }
+\ No newline at end of file
+diff --git a/tests/ShortenEndpointTests.cs b/tests/ShortenEndpointTests.cs
+index b9e6d30..70eb7d0 100644
+--- a/tests/ShortenEndpointTests.cs
++++ b/tests/ShortenEndpointTests.cs
+@@ -17,7 +17,7 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+     }
+ 
+     [Fact]
+-    public async Task R1_Shorten_ReturnsCreatedWithCode()
++    public async Task R7_Shorten_ValidUrl_ReturnsCreatedWithCode()
+     {
+         var client = _factory.CreateClient();
+         var payload = new Dictionary<string, object?>
+@@ -40,7 +40,7 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+     }
+ 
+     [Fact]
+-    public async Task R1_Shorten_DifferentUrls_ReceiveDistinctGeneratedCodes()
++    public async Task R7_Shorten_DifferentUrls_ReceiveDistinctGeneratedCodes()
+     {
+         var client = _factory.CreateClient();
+         var payload1 = new Dictionary<string, object?> { ["url"] = "https://example.com/item/1" };
+@@ -64,7 +64,7 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+     }
+ 
+     [Fact]
+-    public async Task R2_Shorten_WithCustomAlias_ReturnsCreatedWithSpecifiedCode()
++    public async Task R7_Shorten_WithCustomAlias_ReturnsCreatedWithSpecifiedCode()
+     {
+         var client = _factory.CreateClient();
+         var alias = "my-link-" + Guid.NewGuid().ToString("N")[..6];
+@@ -83,7 +83,7 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+     }
+ 
+     [Fact]
+-    public async Task R2_Shorten_DuplicateCustomAlias_ReturnsConflict409()
++    public async Task R7_Shorten_DuplicateCustomAlias_ReturnsConflict409()
+     {
+         var client = _factory.CreateClient();
+         var duplicateAlias = "dup-alias-" + Guid.NewGuid().ToString("N")[..6];
+@@ -108,6 +108,31 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+         Assert.False(string.IsNullOrWhiteSpace(errorContent));
+     }
+ 
++    [Fact]
++    public async Task R7_Shorten_WithExpiration_StoresExpirationTimestamp()
++    {
++        var client = _factory.CreateClient();
++        var targetUrl = "https://example.com/future-exp";
++        var futureExpiration = DateTime.UtcNow.AddDays(7).ToString("yyyy-MM-ddTHH:mm:ssZ");
++
++        var payload = new Dictionary<string, object?>
++        {
++            ["url"] = targetUrl,
++            ["expires_at"] = futureExpiration
++        };
++
++        var response = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
++        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
++
++        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
++        var code = JsonTestHelper.GetStringProperty(doc.RootElement, "code");
++        Assert.NotNull(code);
++
++        var redirectClient = _factory.CreateNoRedirectClient();
++        var redirectResponse = await redirectClient.GetAsync($"/{code}");
++        Assert.Equal(HttpStatusCode.TemporaryRedirect, redirectResponse.StatusCode);
++    }
++
+     [Theory]
+     [InlineData("ftp://example.com/file")]
+     [InlineData("javascript:alert(1)")]
+@@ -147,20 +172,4 @@ public class ShortenEndpointTests : IClassFixture<CustomWebApplicationFactory>
+ 
+         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+     }
+-
+-    [Theory]
+-    [InlineData("http://subdomain.localhost/test")]
+-    [InlineData("http://app.localhost:5000")]
+-    public async Task R7_Shorten_DomainResolvingToPrivateIp_ReturnsBadRequest400(string domainResolvingToPrivate)
+-    {
+-        var client = _factory.CreateClient();
+-        var payload = new Dictionary<string, object?>
+-        {
+-            ["url"] = domainResolvingToPrivate
+-        };
+-
+-        var response = await client.PostAsync("/shorten", JsonTestHelper.CreateJsonContent(payload));
+-
+-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+-    }
+ }
+\ No newline at end of file

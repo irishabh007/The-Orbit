@@ -129,7 +129,36 @@ the session is recorded to `recordings/<project>/` so it can be replayed.
    allowlisted. The **scope** rule stops anything outside the approved plan for your decision.
 7. **Release:** your final call. Then one git commit with the audit-head anchor.
 
-## 5. Failure and control demos (scripted, always available)
+## 5. Harden: Warden fixes its own production defects (recorded)
+
+`python run_demo.py harden --auto-approve`. The request is in
+[demo/requests/harden.md](../demo/requests/harden.md); the existing app is the released brownfield
+output (`demo/baselines/url-shortener-dotnet-analytics.json`). Unedited output:
+[evidence/harden/](evidence/harden/).
+
+An external review found that the recorded output loses click counts under concurrency and never
+migrates an existing database. This scenario asks Warden to fix both, and runs with the
+**consistency review** (docs from the verified code; reviewer agent plus deterministic stack rules).
+
+**Decomposition:** 8 requirements (atomic lifetime counter, atomic daily upsert, EF Core migrations,
+legacy upgrade path, concurrency test, upgrade test, unchanged API), an impact analysis signed off by
+a human, 9 tasks.
+
+**Orchestration:**
+- Verify: build error -> 49/52 (the new legacy-upgrade test caught a missing column) -> 52/52.
+- Docs written from the verified code.
+- Consistency review: **2 blocking findings, both from the deterministic rules, after all 52 tests had
+  passed**: an `EnsureCreated` still in the startup path and a read-then-write daily counter. Sent to
+  the developer only (targeted repair); verify, docs and review re-ran; the second review found
+  nothing.
+- Release: "ready", all 7 must requirements pass; a human makes the final call.
+
+**Result:** atomic counters (`ExecuteUpdateAsync`, `INSERT ... ON CONFLICT DO UPDATE`), an EF Core
+migration applied at startup with an upgrade path for databases created by `EnsureCreated`, a
+100-way concurrent-redirect test and a first-release-database upgrade test. The generated repo
+passes 52/52 with plain `dotnet test`. 19 model calls, about $1.74 at list price.
+
+## 6. Failure and control demos (scripted, always available)
 
 `python run_demo.py failures [--case NAME]`. Model answers are scripted and labelled as such.
 Everything else is real.

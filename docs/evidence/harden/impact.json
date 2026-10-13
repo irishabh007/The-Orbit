@@ -1,0 +1,77 @@
+{
+  "summary": "Harden URL shortener against concurrent redirect click count loss using atomic SQLite updates and upserts, and replace EnsureCreatedAsync with automated legacy bootstrap and EF Core migrations.",
+  "change_type": "bugfix",
+  "affected": [
+    {
+      "target": "src/App/Services/LinkService.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Update GetRedirectAsync to use ExecuteUpdateAsync for atomic lifetime click increment and SQLite INSERT ON CONFLICT upsert for daily clicks without in-memory mutations."
+    },
+    {
+      "target": "src/App/Program.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Replace Database.EnsureCreatedAsync() with legacy database schema bootstrap logic and Database.MigrateAsync()."
+    },
+    {
+      "target": "src/App/Endpoints/LinkEndpoints.cs",
+      "kind": "module",
+      "change": "modify",
+      "reason": "Indirect dependent of LinkService and Program serving the redirect endpoint with updated persistence behavior."
+    },
+    {
+      "target": "GET /{code}",
+      "kind": "endpoint",
+      "change": "modify",
+      "reason": "Endpoint execution path changes to perform atomic database updates and upserts instead of in-memory counter increments."
+    },
+    {
+      "target": "ShortLink",
+      "kind": "data",
+      "change": "modify",
+      "reason": "Lifetime ClickCount and LastVisitedAt are updated atomically in the SQLite database row on redirect."
+    },
+    {
+      "target": "ShortLinkDailyClick",
+      "kind": "data",
+      "change": "modify",
+      "reason": "Daily Clicks counter is incremented or initialized via atomic SQLite upsert on redirect."
+    },
+    {
+      "target": "src/App/Data/Migrations/InitialCreate.cs",
+      "kind": "module",
+      "change": "add",
+      "reason": "Handwritten initial EF Core migration defining ShortLinks and ShortLinkDailyClicks tables with DbContext and Migration metadata attributes."
+    },
+    {
+      "target": "tests/RedirectEndpointTests.cs",
+      "kind": "test",
+      "change": "modify",
+      "reason": "Add concurrency test verifying 100 parallel redirects atomically increment lifetime and daily clicks without lost updates."
+    },
+    {
+      "target": "tests/RateLimitingAndPersistenceTests.cs",
+      "kind": "test",
+      "change": "modify",
+      "reason": "Add legacy database bootstrap upgrade test verifying pre-existing SQLite databases migrate successfully without data loss."
+    }
+  ],
+  "risk": "medium",
+  "risks": [
+    {
+      "risk": "SQLite concurrency locking or transient database busy errors under high-volume concurrent redirect upserts.",
+      "mitigation": "Utilize atomic SQL statements (ExecuteUpdateAsync and INSERT ON CONFLICT) with appropriate SQLite busy timeout and connection configuration, validated by 100-request parallel redirect tests."
+    },
+    {
+      "risk": "Partial legacy database upgrade failure leaving __EFMigrationsHistory in an inconsistent state if interrupted.",
+      "mitigation": "Wrap CREATE TABLE IF NOT EXISTS and __EFMigrationsHistory bootstrap seeding in an explicit database transaction prior to calling Database.MigrateAsync()."
+    }
+  ],
+  "regression_tests": [
+    "tests/AnalyticsAndHealthTests.cs",
+    "tests/RateLimitingAndPersistenceTests.cs",
+    "tests/RedirectEndpointTests.cs",
+    "tests/ShortenEndpointTests.cs"
+  ]
+}
