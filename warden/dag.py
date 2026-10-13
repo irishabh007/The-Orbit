@@ -23,6 +23,8 @@ class GraphError(ValueError):
 class GateResult:
     ok: bool
     reason: str = ""
+    # on failure: which of the node's ``on_failure_replan`` targets are at fault (empty: all)
+    replan: tuple[str, ...] = ()
 
 
 EntryGate = Callable[[ArtifactStore], GateResult]

@@ -365,7 +365,7 @@ class Orchestrator:
         if spec.exit_gate is not None:
             gate = spec.exit_gate(result)
             if not gate.ok:
-                self._fail(nid, f"exit gate: {gate.reason}")
+                self._fail(nid, f"exit gate: {gate.reason}", replan_only=gate.replan)
                 return
         current = {c: (a.sha256 if (a := self.store.latest(c)) else None) for c in spec.consumes}
         if current != snapshot:  # inputs moved while the agent worked: result is stale
@@ -484,7 +484,8 @@ class Orchestrator:
         if changed:
             self.replan(changed, cause=seq)
 
-    def _fail(self, nid: str, reason: str, retryable: bool = True, requeue_only: bool = False) -> None:
+    def _fail(self, nid: str, reason: str, retryable: bool = True, requeue_only: bool = False,
+              replan_only: tuple[str, ...] = ()) -> None:
         spec, rec = self.graph.nodes[nid], self._rec[nid]
         seq = self._transition(nid, NodeState.FAILED, reason=reason)
         if requeue_only:
@@ -502,7 +503,7 @@ class Orchestrator:
             self._transition(nid, NodeState.READY)
             return
         if retryable and spec.on_failure_replan and rec.replans < spec.max_replans:
-            self._replan_upstream(nid, reason, seq)
+            self._replan_upstream(nid, reason, seq, replan_only)
             return
         self._transition(nid, NodeState.ROLLED_BACK, reason=reason, terminal=True)
         self._log(EventType.ROLLBACK, nid,
@@ -510,14 +511,16 @@ class Orchestrator:
                    "note": "staged outputs discarded; nothing had been committed"}, [seq])
         self._halt, self._halt_reason = True, f"{nid}: {reason}"
 
-    def _replan_upstream(self, nid: str, reason: str, cause: int) -> None:
-        """Non-linear recovery: route a failure back to the upstream nodes that can fix it."""
+    def _replan_upstream(self, nid: str, reason: str, cause: int, only: tuple[str, ...] = ()) -> None:
+        """Non-linear recovery: route a failure back to the upstream nodes that can fix it
+        (``only``: the gate named the ones at fault; never outside ``on_failure_replan``)."""
         spec, rec = self.graph.nodes[nid], self._rec[nid]
+        targets = tuple(t for t in spec.on_failure_replan if t in only) or spec.on_failure_replan
         rec.replans += 1
         self._transition(nid, NodeState.ROLLED_BACK, reason=reason)
-        for target in spec.on_failure_replan:
+        for target in targets:
             self._feedback[target] = f"{nid} failed: {reason}"
-        scope = set(spec.on_failure_replan).union(*(self.graph.descendants(t) for t in spec.on_failure_replan))
+        scope = set(targets).union(*(self.graph.descendants(t) for t in targets))
         invalidated: list[str] = []
         for other in self.graph.order:
             orec = self._rec[other]
@@ -529,7 +532,7 @@ class Orchestrator:
         self._transition(nid, NodeState.PENDING, reason="re-planned")
         rec.attempts, rec.used_fallback = 0, False
         self._log(EventType.REPLAN, nid,
-                  {"reason": reason, "feedback_to": list(spec.on_failure_replan), "invalidated": invalidated,
+                  {"reason": reason, "feedback_to": list(targets), "invalidated": invalidated,
                    "loop": rec.replans, "max_loops": spec.max_replans}, [cause])
         self._save()
 

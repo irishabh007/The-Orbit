@@ -466,6 +466,22 @@ class RepairLoopTests(OrchestratorTestCase):
         self.assertEqual(len(replans), 1)
         self.assertEqual(replans[0].data["feedback_to"], ["impl"])
 
+    def test_a_gate_can_send_the_repair_to_only_the_node_at_fault(self) -> None:
+        # a docs-only finding must not make the developer regenerate the code
+        verdicts = iter([GateResult(False, "docs claim X; code does Y", replan=("docs",)), GateResult(True)])
+        check = NodeSpec("check", "check", ("impl", "docs"), ("code", "readme"), ("check_report",),
+                         max_retries=0, exit_gate=lambda result: next(verdicts),
+                         on_failure_replan=("impl", "docs"), max_replans=2)
+        release = NodeSpec("release", "release", ("check", "tests"), ("code", "test_suite", "readme"),
+                           ("release_report",))
+        nodes = [n for n in sdlc_nodes() if n.id != "release"] + [check, release]
+        agents = {**self.default_agents(), "check": self.agent("check", ("check_report",))}
+        summary = self.build(nodes, agents).run()
+        self.assertEqual(summary.state, RunState.SUCCEEDED, summary.reason)
+        self.assertEqual((self.calls["impl"], self.calls["docs"], self.calls["check"]), (1, 2, 2))
+        (replan,) = [e for e in self.types(EventType.REPLAN) if e.data.get("feedback_to")]
+        self.assertEqual(replan.data["feedback_to"], ["docs"])
+
     def test_repair_loops_are_bounded(self) -> None:
         agents, _ = self.agents_with(verify_passes_on=99)
         summary = self.build(self.verify_nodes(max_replans=2), agents).run()
