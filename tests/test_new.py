@@ -63,6 +63,7 @@ class IntakeTests(unittest.TestCase):
         scenario = new_project_scenario("Todo API", "a todo api")
         self.assertEqual(scenario.stack, DOTNET)
         self.assertTrue(scenario.graph().nodes["requirements"].requires_approval)
+        self.assertIn("reviewer", scenario.graph().nodes)  # docs checked against code before release
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -134,7 +135,7 @@ class RoleRouter:
     name = "router"
     ROLES = (("requirements engineer", "requirements"), ("software architect", "architect"),
              (".NET engineer", "developer"), ("test engineer", "tester"), ("technical writer", "docs"),
-             ("release reviewer", "release"))
+             ("consistency reviewer", "reviewer"), ("release reviewer", "release"))
 
     def complete(self, request: Any) -> Any:
         from warden.llm import LLMResponse

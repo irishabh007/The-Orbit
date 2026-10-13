@@ -118,4 +118,5 @@ autonomy:
     verify: full            # runs checks only; produces a report, never code
     scan: full              # static analysis only; never executes code
     docs: full
+    reviewer: full          # only reports findings; its gate routes blocking ones back to their owners
     release: supervised     # a human makes the final release call

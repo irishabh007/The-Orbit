@@ -9,14 +9,18 @@ from __future__ import annotations
 import json
 from collections import Counter
 
+from warden.agent import AgentContext, AgentResult
 from warden.agents.base import BundleAgent, StructuredAgent
 from warden.agents.schemas import (
+    ConsistencyReview,
     Design,
     FileBundle,
+    Finding,
     ImpactAnalysis,
     ReleaseReview,
     RequirementsSpec,
 )
+from warden.bundle import BundleError, unpack
 
 STACK = (
     "Python 3.11+, FastAPI, the standard-library sqlite3 module for storage, pytest with "
@@ -218,6 +222,23 @@ Document the service described by `spec.json` and `design.json`.
 - Document only what the design specifies; say so where something is uncertain.
 """
 
+    # only when the code is an input (review graphs), so other prompts and their recordings stay put
+    from_code = """
+- The code and tests are included below. Describe what the code actually does: never claim a
+  property (atomic, transactional, migrated, cached, validated, ...) you cannot point to in the code.
+  Where the code differs from the design, document the code and say so.
+"""
+
+    def _prompt(self, inputs: dict[str, str], feedback: str | None, previous: str = "") -> str:
+        if "code.bundle" not in inputs:
+            return super()._prompt(inputs, feedback, previous)
+        task = self.task
+        self.task = task.rstrip() + "\n" + self.from_code
+        try:
+            return super()._prompt(inputs, feedback, previous)
+        finally:
+            self.task = task
+
     def check(self, model: FileBundle, inputs: dict[str, str]) -> list[str]:
         paths = [f.path for f in model.files]
         problems = [f"{p}: docs must be README.md or docs/*.md" for p in paths
@@ -225,6 +246,64 @@ Document the service described by `spec.json` and `design.json`.
         if "README.md" not in paths:
             problems.append("README.md is missing")
         return problems
+
+
+def _bundle_paths(inputs: dict[str, str]) -> set[str]:
+    paths: set[str] = set()
+    for name, content in inputs.items():
+        if name.endswith(".bundle"):
+            try:
+                paths.update(unpack(content))
+            except BundleError:
+                continue
+    return paths
+
+
+class ReviewerAgent(StructuredAgent[ConsistencyReview]):
+    """Checks that what the docs, design and spec claim is true of the code (before release).
+
+    The model's findings are joined by the stack's deterministic rules, which it cannot remove.
+    """
+
+    name = "reviewer"
+    schema = ConsistencyReview
+    output = "review.json"
+    kind = "review"
+    role = ("You are a meticulous code reviewer and consistency reviewer. You compare what documents claim "
+            "with what the code does, and you report only what you can point to in the code.")
+    task = """
+Compare the documentation (`docs.bundle`), the design (`design.json`) and the requirements (`spec.json`)
+with the code (`code.bundle`) and tests (`tests.bundle`).
+- For every claim about behaviour (concurrency and atomicity, persistence and schema changes,
+  migrations and upgrades, validation, security, error handling, configuration), check the code.
+- A finding is blocking when the code contradicts a claim or a 'must' requirement, or a defect would
+  lose or corrupt data in production (for example lost updates under concurrency, or a schema change
+  that an existing database never receives). Otherwise it is minor.
+- owner: developer (code), tester (tests) or docs (documentation) - whoever must change.
+- evidence: the file path(s) and line or symbol. Report nothing you cannot point to.
+- No findings is a valid answer when everything matches.
+"""
+
+    def check(self, model: ConsistencyReview, inputs: dict[str, str]) -> list[str]:
+        known = _bundle_paths(inputs) | set(inputs)
+        return [f"finding {i + 1}: evidence cites no known file (known: {', '.join(sorted(known)[:30])})"
+                for i, f in enumerate(model.findings) if not any(path in f.evidence for path in known)]
+
+    def run(self, ctx: AgentContext) -> AgentResult:
+        result = super().run(ctx)
+        model = ConsistencyReview.model_validate_json(result.outputs[self.output])
+        files: dict[str, str] = {}
+        for name in ctx.consumes:
+            if name.endswith(".bundle") and name != "docs.bundle":
+                files.update(unpack(ctx.read_text(name)))
+        model.findings.extend(Finding.model_validate(f) for f in self.stack.review_rules(files))
+        return AgentResult(self.render(model), kind=self.kind, summary=self.summarize(model),
+                           escalate=result.escalate, usage=result.usage)
+
+    def summarize(self, model: ConsistencyReview) -> str:
+        severity = Counter(f.severity for f in model.findings)
+        return (f"Consistency review: {severity['blocking']} blocking, {severity['minor']} minor "
+                f"finding(s). {model.summary}")
 
 
 class ReleaseAgent(StructuredAgent[ReleaseReview]):

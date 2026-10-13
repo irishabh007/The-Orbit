@@ -12,6 +12,7 @@ in-agent syntax check, the verify commands, and the codebase scanner.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,12 @@ class StackError(ValueError):
 
 
 Rules = Callable[[Sequence[str]], list[str]]
+# deterministic review rules: files -> findings (dicts in the ``Finding`` schema shape)
+ReviewRules = Callable[[Mapping[str, str]], list[dict[str, str]]]
+
+
+def no_review_rules(files: Mapping[str, str]) -> list[dict[str, str]]:
+    return []
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,7 @@ class StackProfile:
     scan: Callable[[Mapping[str, str]], dict[str, Any]]
     syntax_check: Callable[[str, str], str | None] | None = None  # (path, content) -> problem
     prompts: dict[str, dict[str, str]] = field(default_factory=dict)  # role -> {"role"/"task": text}
+    review_rules: ReviewRules = no_review_rules  # run by the consistency reviewer, model-free
 
 
 # ------------------------------------------------------------------ python-fastapi
@@ -120,6 +128,37 @@ being written in parallel, so rely only on that contract. Constraints: {DOTNET_C
 """
 
 
+_LOST_UPDATE = re.compile(r"\b\w+\.\w*Count\w*\s*(?:\+=\s*1\b|\+\+)")
+_ENSURE_CREATED = re.compile(r"\bEnsureCreated(?:Async)?\s*\(")
+
+
+def _dotnet_review_rules(files: Mapping[str, str]) -> list[dict[str, str]]:
+    """Two defects an external review found in recorded output that tests on fresh databases miss."""
+    findings: list[dict[str, str]] = []
+    for path in sorted(p for p in files if p.endswith(".cs") and not p.startswith("tests/")):
+        for number, line in enumerate(files[path].splitlines(), 1):
+            if _LOST_UPDATE.search(line):
+                findings.append({
+                    "severity": "blocking", "owner": "developer", "source": "rule",
+                    "claim": "a counter that concurrent requests update",
+                    "reality": "read-then-write increment: concurrent requests can lose updates",
+                    "evidence": f"{path}:{number}: {line.strip()}",
+                    "fix": "increment in the database in one statement, e.g. ExecuteUpdateAsync(s => "
+                           "s.SetProperty(x => x.Count, x => x.Count + 1)), and describe it accurately",
+                })
+            if _ENSURE_CREATED.search(line):
+                findings.append({
+                    "severity": "blocking", "owner": "developer", "source": "rule",
+                    "claim": "the schema can change between releases",
+                    "reality": "EnsureCreated never changes an existing database: new tables or "
+                               "columns are missing after an upgrade, while tests on fresh databases pass",
+                    "evidence": f"{path}:{number}: {line.strip()}",
+                    "fix": "use EF Core migrations (Database.Migrate/MigrateAsync at startup), including "
+                           "an upgrade path for databases created earlier, and a test that upgrades one",
+                })
+    return findings
+
+
 def _dotnet_developer_rules(paths: Sequence[str]) -> list[str]:
     problems = [f"{p}: tests belong to the tester" for p in sorted(paths) if p.startswith("tests/")]
     if "src/App/App.csproj" not in paths:
@@ -153,6 +192,7 @@ DOTNET = StackProfile(
               requires=r"Total:\s*[1-9]", digest=dotnet_test_digest),
     ),
     scan=scan_csharp,
+    review_rules=_dotnet_review_rules,
     syntax_check=None,  # no C# parser in the standard library; `dotnet build` reports syntax errors
     prompts={
         "architect": {"task": _DOTNET_ARCHITECT_TASK},

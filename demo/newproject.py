@@ -22,4 +22,5 @@ def slugify(name: str) -> str:
 def new_project_scenario(name: str, idea: str, stack: StackProfile = DOTNET) -> Scenario:
     """A vague idea always gets its spec reviewed (and its questions answered) by a human."""
     request = f"# {name.strip()}\n\n{idea.strip()}\n"
-    return Scenario(slugify(name), request, partial(sdlc_graph, require_spec_approval=True), stack=stack)
+    return Scenario(slugify(name), request, partial(sdlc_graph, require_spec_approval=True, review=True),
+                    stack=stack)

@@ -163,6 +163,22 @@ class FileBundle(_Model):
         return self
 
 
+# ------------------------------------------------------------------ consistency review
+class Finding(_Model):
+    severity: Literal["blocking", "minor"]
+    owner: Literal["developer", "tester", "docs"]  # who fixes it: code, tests or docs
+    claim: Text  # what the docs, design or spec say (quote it)
+    reality: Text  # what the code actually does
+    evidence: Text  # file path(s), with line or symbol
+    fix: Text
+    source: Literal["model", "rule"] = "model"  # "rule": a deterministic stack check, not the model
+
+
+class ConsistencyReview(_Model):
+    summary: Text
+    findings: list[Finding]
+
+
 # ------------------------------------------------------------------ release review
 class CheckItem(_Model):
     item: Text

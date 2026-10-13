@@ -60,9 +60,11 @@ REVIEW: dict[str, Any] = {
     "blocking_issues": [],
 }
 
+CONSISTENCY: dict[str, Any] = {"summary": "Scripted review: docs and design match the code.", "findings": []}
+
 ANSWERS: dict[str, dict[str, Any]] = {
     "requirements": SPEC, "architect": DESIGN, "developer": CODE, "tester": TESTS, "docs": DOCS,
-    "release": REVIEW,
+    "reviewer": CONSISTENCY, "release": REVIEW,
 }
 
 
