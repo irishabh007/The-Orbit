@@ -95,6 +95,20 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("valid URL -> 201 with code", shown)  # acceptance criteria rendered
         self.assertIn("locks", shown)  # the human is told approval locks the spec
 
+    def test_event_feed_waits_while_a_human_is_answering(self) -> None:
+        # approvals no longer block the scheduler, so events keep coming during a prompt; they
+        # are held back so they do not interrupt what the human is reading
+        from demo.console import ConsoleEventLog
+        from warden.models import EventType
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, ConsoleEventLog(Path(tmp) / "e.jsonl", out=out) as log:
+            def human(prompt: str) -> str:
+                log.append("run", EventType.RUN_STARTED, "orchestrator", None, {"reason": "parallel work"})
+                self.assertNotIn("parallel work", out.getvalue())  # not while the prompt is open
+                return "a"
+            ConsoleApprover("alice", input_fn=human, out=out).decide(spec_request(spec_with()))
+            self.assertIn("parallel work", out.getvalue())  # shown once the human has answered
+
     def test_discovery_rounds_are_bounded(self) -> None:
         approver = ConsoleApprover("alice", input_fn=Typist("q", "x", "", "q", "x", "", "a"), out=io.StringIO(),
                                    discovery_rounds=2)

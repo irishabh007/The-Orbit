@@ -9,6 +9,9 @@ Design rules (see CLAUDE.md):
   caused it (decision lineage).
 * Failure handling is bounded: retries -> fallback agent -> terminal rollback + halt.
 * Safe-stop (kill switch or step budget) discards in-flight work and commits nothing.
+* Waiting for a human never blocks the scheduler: ``approver.decide()`` runs on an approval
+  thread, and the decision is applied back on the scheduler thread. An optional timeout fails
+  the gate closed (treated as a rejection).
 """
 
 from __future__ import annotations
@@ -45,6 +48,19 @@ _ACTOR = "orchestrator"
 class Config:
     max_workers: int = 4
     step_budget: int = 100  # max agent executions per run() call (safe-stop beyond this)
+    approval_workers: int = 1  # humans asked at once (1: one console prompt at a time)
+    approval_timeout_s: float | None = None  # None: wait for the human indefinitely
+
+
+@dataclass
+class _PendingApproval:
+    """A staged result waiting for a human; applied on the scheduler thread when decided."""
+    nid: str
+    result: AgentResult
+    duration_ms: int
+    snapshot: dict[str, str | None]
+    request_seq: int
+    deadline: float | None
 
 
 @dataclass
@@ -102,6 +118,8 @@ class Orchestrator:
         self._stop_event = threading.Event()
         self._stop_reason = ""
         self._run_start = 0
+        self._approval_pool: ThreadPoolExecutor | None = None
+        self._approvals: dict[Future[ApprovalDecision], _PendingApproval] = {}
         self._load()
 
     # ------------------------------------------------------------------ public
@@ -178,18 +196,30 @@ class Orchestrator:
         self._normalize()
         start = self._run_start = self._log(EventType.RUN_STARTED, None, {"nodes": list(self.graph.order)})
         futures: dict[Future[tuple[AgentResult, int]], tuple[str, dict[str, str | None]]] = {}
-        with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
-            while True:
-                self._sync_stop()
-                if not (self._halt or self._stopped):
-                    self._launch_ready(pool, futures)
-                    self._sync_stop()  # a step-budget stop raised while launching
-                if not futures:
-                    break
-                done, _ = wait(futures, return_when=FIRST_COMPLETED)
-                for fut in done:
-                    nid, snapshot = futures.pop(fut)
-                    self._process(nid, fut, snapshot)
+        # its own pool: a human who never answers must not hold up agents, or the run's shutdown
+        self._approval_pool = ThreadPoolExecutor(max_workers=self.config.approval_workers,
+                                                 thread_name_prefix="approval")
+        self._approvals = {}
+        try:
+            with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
+                while True:
+                    self._sync_stop()
+                    if not (self._halt or self._stopped):
+                        self._launch_ready(pool, futures)
+                        self._sync_stop()  # a step-budget stop raised while launching
+                    if not futures and not self._approvals:
+                        break
+                    pending: list[Future[Any]] = [*futures, *self._approvals]
+                    done, _ = wait(pending, timeout=self._next_deadline(), return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        if fut in futures:
+                            nid, snapshot = futures.pop(fut)
+                            self._process(nid, fut, snapshot)
+                        else:
+                            self._decided(self._approvals.pop(fut), fut)
+                    self._expire_approvals()
+        finally:
+            self._approval_pool.shutdown(wait=False, cancel_futures=True)
         summary = self._summarize()
         self._log(
             EventType.RUN_FINISHED, None,
@@ -360,22 +390,62 @@ class Orchestrator:
                             {"artifacts": sorted(result.outputs), "summary": result.summary, "reason": why},
                             self._own(nid))
             self._transition(nid, NodeState.AWAITING_APPROVAL)
-            decision: ApprovalDecision = self.approver.decide(
-                ApprovalRequest(self.run_id, nid, result.summary, tuple(sorted(result.outputs)), why,
-                                preview=preview_outputs(result.outputs)))
-            # the decision becomes this node's latest cause, so whatever follows (commit or
-            # failure) links back to the human who made it: decision lineage reaches people
-            self._rec[nid].last_event = self._log(
-                EventType.APPROVAL_DECIDED, nid, {"verdict": decision.verdict, "comment": decision.comment},
-                [req], actor=f"human:{decision.approver}")
-            if decision.verdict == "reject":
-                self._fail(nid, f"rejected by {decision.approver}: {decision.comment}", retryable=False)
-                return
-            if decision.verdict == "changes":
-                self._feedback[nid] = decision.comment
-                self._fail(nid, f"changes requested by {decision.approver}: {decision.comment}")
-                return
+            request = ApprovalRequest(self.run_id, nid, result.summary, tuple(sorted(result.outputs)), why,
+                                      preview=preview_outputs(result.outputs))
+            assert self._approval_pool is not None  # created by run()
+            timeout = self.config.approval_timeout_s
+            deadline = time.monotonic() + timeout if timeout is not None else None
+            asked = self._approval_pool.submit(self.approver.decide, request)
+            self._approvals[asked] = _PendingApproval(nid, result, ms, snapshot, req, deadline)
+            return  # the scheduler carries on; _decided() applies the answer
         self._commit(nid, result, ms)
+
+    def _decided(self, pending: _PendingApproval, fut: Future[ApprovalDecision]) -> None:
+        """Apply a human decision, on the scheduler thread (only it changes node state)."""
+        nid = pending.nid
+        decision = fut.result()  # an approver that crashes takes the run down, as before
+        # the decision becomes this node's latest cause, so whatever follows (commit or
+        # failure) links back to the human who made it: decision lineage reaches people
+        self._rec[nid].last_event = self._log(
+            EventType.APPROVAL_DECIDED, nid, {"verdict": decision.verdict, "comment": decision.comment},
+            [pending.request_seq], actor=f"human:{decision.approver}")
+        self._sync_stop()
+        if self._stopped:
+            self._discard(nid, f"safe-stop: {self._stop_reason}")
+            return
+        if decision.verdict == "reject":
+            self._fail(nid, f"rejected by {decision.approver}: {decision.comment}", retryable=False)
+            return
+        if decision.verdict == "changes":
+            self._feedback[nid] = decision.comment
+            self._fail(nid, f"changes requested by {decision.approver}: {decision.comment}")
+            return
+        spec = self.graph.nodes[nid]
+        current = {c: (a.sha256 if (a := self.store.latest(c)) else None) for c in spec.consumes}
+        if current != pending.snapshot:  # inputs moved while the human was deciding
+            self._rec[nid].attempts -= 1
+            self._log(EventType.REPLAN, nid, {"discarded": "inputs changed while awaiting approval"},
+                      self._own(nid))
+            self._fail(nid, "inputs changed while awaiting approval", requeue_only=True)
+            return
+        self._commit(nid, pending.result, pending.duration_ms)
+
+    def _next_deadline(self) -> float | None:
+        deadlines = [p.deadline for p in self._approvals.values() if p.deadline is not None]
+        return max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
+
+    def _expire_approvals(self) -> None:
+        """Fail closed: an approval nobody answered in time is a rejection (never retried)."""
+        now = time.monotonic()
+        for fut, pending in list(self._approvals.items()):
+            if pending.deadline is not None and now >= pending.deadline and not fut.done():
+                del self._approvals[fut]  # a late answer is ignored
+                waited = self.config.approval_timeout_s
+                self._rec[pending.nid].last_event = self._log(
+                    EventType.APPROVAL_DECIDED, pending.nid,
+                    {"verdict": "reject", "comment": f"no decision within {waited}s"},
+                    [pending.request_seq], actor="system:approval-timeout")
+                self._fail(pending.nid, f"approval timed out after {waited}s", retryable=False)
 
     def _log_usage(self, nid: str, usage: Any) -> None:
         """Model calls an attempt spent (tokens, latency), success or not; feeds cost metrics."""

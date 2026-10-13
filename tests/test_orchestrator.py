@@ -250,6 +250,53 @@ class PolicyAndApprovalTests(OrchestratorTestCase):
         self.assertEqual(summary.state, RunState.FAILED)
         self.assertIsNone(self.store.latest("design"))
 
+    def test_a_pending_approval_does_not_block_parallel_work(self) -> None:
+        # review finding: decide() ran on the scheduler thread, so finished parallel work queued
+        # behind a human who was still reading
+        def slow_tests(ctx: AgentContext) -> AgentResult:
+            threading.Event().wait(0.05)  # finishes after impl, while impl awaits its human
+            return AgentResult({"test_suite": "tests"})
+
+        store = self.store
+
+        class PatientHuman:
+            saw_tests_committed = False
+
+            def decide(self, request):  # type: ignore[no-untyped-def]
+                for _ in range(200):  # up to 2s for the parallel branch to be committed
+                    if store.latest("test_suite") is not None:
+                        self.saw_tests_committed = True
+                        break
+                    threading.Event().wait(0.01)
+                return ApprovalDecision("approve", "alice")
+
+        agents = self.default_agents()
+        agents["tests"] = FunctionAgent("tests", slow_tests)
+        nodes = sdlc_nodes(impl=NodeSpec("impl", "impl", ("design",), ("design",), ("code",),
+                                         requires_approval=True))
+        human = PatientHuman()
+        self.assertEqual(self.build(nodes, agents, approver=human).run().state, RunState.SUCCEEDED)
+        self.assertTrue(human.saw_tests_committed)
+
+    def test_an_unanswered_approval_times_out_and_fails_closed(self) -> None:
+        answered = threading.Event()
+        self.addCleanup(answered.set)
+
+        class AwayHuman:
+            def decide(self, request):  # type: ignore[no-untyped-def]
+                answered.wait(5)
+                return ApprovalDecision("approve", "alice")  # too late: ignored
+
+        nodes = sdlc_nodes(design=NodeSpec("design", "design", ("req",), ("spec",), ("design",),
+                                           requires_approval=True))
+        summary = self.build(nodes, approver=AwayHuman(), config=Config(approval_timeout_s=0.05)).run()
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertIn("approval timed out", summary.reason)
+        self.assertIsNone(self.store.latest("design"))  # nothing committed without a decision
+        decided = self.types(EventType.APPROVAL_DECIDED)
+        self.assertEqual([(e.actor, e.data["verdict"]) for e in decided], [("system:approval-timeout", "reject")])
+        self.assertEqual(len(self.types(EventType.RETRY_SCHEDULED)), 0)  # treated like a rejection
+
     def test_approver_sees_a_preview_of_what_it_is_approving(self) -> None:
         from warden.bundle import pack
         bundle = pack({"app/main.py": "line\n" * 30, "requirements.txt": "fastapi\n"})

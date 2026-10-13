@@ -6,7 +6,8 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, TextIO
 
 from warden.approval import ApprovalDecision, ApprovalRequest
@@ -28,20 +29,52 @@ _MENU = """  [a] approve
   [v] view outputs           (see what you are approving first)"""
 
 
+class _Feed:
+    """The live console feed. Approvals no longer block the scheduler, so events keep arriving
+    while a human answers a prompt; they wait and are printed once the human has answered."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._holds = 0
+        self._waiting: list[tuple[str, TextIO]] = []
+
+    def emit(self, line: str, out: TextIO) -> None:
+        with self._lock:
+            if self._holds:
+                self._waiting.append((line, out))
+            else:
+                print(line, file=out, flush=True)
+
+    @contextmanager
+    def hold(self) -> Iterator[None]:
+        with self._lock:
+            self._holds += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._holds -= 1
+                if not self._holds:
+                    for line, out in self._waiting:
+                        print(line, file=out, flush=True)
+                    self._waiting.clear()
+
+
+FEED = _Feed()
+
+
 class ConsoleEventLog(EventLog):
     """An EventLog that also prints a one-line summary of each event as it is written."""
 
     def __init__(self, *args: Any, out: TextIO = sys.stdout, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._out = out
-        self._print_lock = threading.Lock()
 
     def append(self, *args: Any, **kwargs: Any) -> Event:
         event = super().append(*args, **kwargs)
         line = describe(event)
         if line:
-            with self._print_lock:
-                print(line, file=self._out, flush=True)
+            FEED.emit(line, self._out)
         return event
 
 
@@ -144,6 +177,10 @@ class ConsoleApprover:
         self._rounds_used: dict[str, int] = {}
 
     def decide(self, request: ApprovalRequest) -> ApprovalDecision:
+        with FEED.hold():  # the run carries on meanwhile; its events wait until the human answers
+            return self._decide(request)
+
+    def _decide(self, request: ApprovalRequest) -> ApprovalDecision:
         p = self._out
         print("\n" + "=" * 78, file=p)
         print(f"APPROVAL NEEDED  node: {request.node_id}   run: {request.run_id}", file=p)
@@ -234,8 +271,8 @@ class LoggedClient:
         t0 = time.monotonic()
         response = self.inner.complete(request)
         tokens = f", {response.output_tokens} tokens out" if response.output_tokens else ""
-        print(f"       llm  {self.role:<12} {response.backend} {time.monotonic() - t0:.1f}s{tokens}",
-              file=self._out, flush=True)
+        FEED.emit(f"       llm  {self.role:<12} {response.backend} {time.monotonic() - t0:.1f}s{tokens}",
+                  self._out)
         return response
 
 
