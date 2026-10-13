@@ -69,6 +69,23 @@ class RunDirTests(TmpCase):
         prepare_run_dir(self.root / "r")
         self.assertFalse(locked.exists())
 
+    def test_a_second_run_cannot_wipe_a_run_in_progress(self) -> None:
+        # found while recording "harden": a leftover retry loop started a second run on the same
+        # folder, and its cleanup deleted the live run's artifact blobs, crashing it
+        from demo.runner import RunLocked, run_lock
+        run_dir = prepare_run_dir(self.root / "r")
+        (run_dir / "artifacts").mkdir()
+        (run_dir / "artifacts" / "blob").write_text("in use", encoding="utf-8")
+        with run_lock(run_dir):
+            with self.assertRaises(RunLocked), run_lock(run_dir):
+                pass  # pragma: no cover
+            with self.assertRaises(RunLocked):
+                run_scenario(load_scenario("greenfield"), run_dir, scripted_clients(), ScriptedApprover(),
+                             verifier=passing_verifier(), publish_repo=False, out=io.StringIO())
+            self.assertTrue((run_dir / "artifacts" / "blob").exists())  # nothing deleted
+        with run_lock(run_dir):  # released when the first run ends (or its process dies)
+            prepare_run_dir(run_dir)
+
     def test_interrupted_cleanup_keeps_the_marker_so_a_rerun_still_works(self) -> None:
         run_dir = prepare_run_dir(self.root / "r")
         (run_dir / "repo").mkdir()

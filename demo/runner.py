@@ -7,7 +7,8 @@ import os
 import shutil
 import stat
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -42,6 +43,7 @@ BASELINES = Path(__file__).resolve().parent / "baselines"
 ANSWERS = Path(__file__).resolve().parent / "answers"
 DEFAULT_POLICY = ROOT / "policies" / "default.yaml"
 RUN_MARKER = ".warden-run"
+RUN_LOCK = ".warden-lock"
 ROLES = tuple(cls.name for cls in ROLE_CLASSES)
 
 
@@ -154,16 +156,49 @@ def _seed_baseline(store: ArtifactStore, files: dict[str, str]) -> None:
     store.put(BASELINE[1], pack(split["tests.bundle"]), kind="baseline", produced_by="human:existing-repo")
 
 
+class RunLocked(RuntimeError):
+    """Another run is using this output directory."""
+
+
+@contextmanager
+def run_lock(run_dir: Path) -> Iterator[None]:
+    """Hold an OS file lock on the run directory for the whole run. The OS releases it when the
+    process exits, even on a crash, so there is never a stale lock to clean up."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(run_dir / RUN_LOCK, "a+b")  # noqa: SIM115 - held for the duration of the run
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RunLocked(f"{run_dir} is in use by another run; wait for it to finish") from None
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        handle.close()
+
+
 def prepare_run_dir(path: str | Path) -> Path:
     """Fresh output directory. Only ever deletes a directory this demo created itself."""
     run_dir = Path(path)
     marker = run_dir / RUN_MARKER
     if run_dir.exists():
-        if not marker.exists() and any(run_dir.iterdir()):
+        if not marker.exists() and any(c.name != RUN_LOCK for c in run_dir.iterdir()):
             raise ValueError(f"{run_dir} exists and was not created by run_demo.py; refusing to delete it")
-        # clear everything except the marker, so an interrupted cleanup stays recognisably ours
+        # clear everything except the marker (so an interrupted cleanup stays recognisably ours)
+        # and the lock (held by this run)
         for child in run_dir.iterdir():
-            if child == marker:
+            if child in (marker, run_dir / RUN_LOCK):
                 continue
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child, onerror=_make_writable_and_retry)
@@ -191,6 +226,23 @@ def run_scenario(
     policy_path: Path = DEFAULT_POLICY,
     out: TextIO = sys.stdout,
     mode: str = "",  # how the model was used, shown in the report title
+) -> ScenarioResult:
+    with run_lock(Path(run_dir)):  # a second run on this folder must not wipe this one
+        return _run_scenario(scenario, Path(run_dir), llm, approver, verifier=verifier,
+                             publish_repo=publish_repo, policy_path=policy_path, out=out, mode=mode)
+
+
+def _run_scenario(
+    scenario: Scenario,
+    run_dir: Path,
+    llm: LLMClient | Mapping[str, LLMClient],
+    approver: Approver,
+    *,
+    verifier: VerifyAgent | None,
+    publish_repo: bool,
+    policy_path: Path,
+    out: TextIO,
+    mode: str,
 ) -> ScenarioResult:
     run_dir = prepare_run_dir(run_dir)
     run_id = f"{scenario.name}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
