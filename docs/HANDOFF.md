@@ -39,7 +39,7 @@ orchestrator can start from any point (brownfield).
 | Rollback/features | git-based, per-feature commits (artifact-level rollback already implemented) |
 | Packaging | Plain `python -m venv` + `pip install -r requirements-demo.txt -r requirements-dev.txt` + `run_demo.py <greenfield|brownfield|ambiguous|failures>` (`--auto-approve`, `--record`, `--live`, `--prune`). No Docker |
 | CI | GitHub Actions on Ubuntu + Windows: fresh install, lint, types, tests, demos |
-| Claims | Narrow and defensible: "production-grade structure and practices", not "any requirement, fully production-ready" |
+| Claims | Narrow and defensible: governed, reviewed, tested output with a human release decision; **not** "production-ready". An external review found two bugs the gates missed (README "Known gap") |
 
 ## 3. Status (2026-10-13): development complete
 

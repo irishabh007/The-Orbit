@@ -12,6 +12,28 @@ hash-chained audit log from which every reported metric is computed.
 
 > The GitHub repository is named **The-Orbit**; the project inside it is **Warden**.
 
+## Known gap: two real bugs got through (being fixed)
+
+An external review found two defects in the recorded .NET output that Warden's gates did not catch:
+
+- **Lost click counts:** the generated docs say counters update atomically, but the code reads, then
+  writes (`ClickCount += 1`), so concurrent redirects can lose counts.
+- **No schema migration:** the brownfield change adds a table and its docs call it an additive
+  migration, but the app uses `EnsureCreatedAsync()`, which never adds a table to an existing
+  database. The tests use fresh databases, so they passed, and the release review approved.
+
+**Why they got through:** verify proves the code *builds and its tests pass*; nothing checked that
+what the docs and design *claim* is true of the code, and no test upgraded an existing database.
+So the generated output is a reviewed, tested starting point, not production-ready code: that call
+stays with the human release gate.
+
+**What is being done:** rather than editing the generated code by hand, Warden will fix both bugs
+through its own governed process, with checks that would have caught them: the docs agent reads
+the code, a consistency-review step checks claims against code before release, and verify fails a
+.NET change that adds a table without an EF Core migration. The result will be a new recorded
+brownfield run in [docs/evidence/](docs/evidence/). Status and details:
+[ENGINEERING_SUMMARY.md](docs/ENGINEERING_SUMMARY.md#external-review-findings-and-responses).
+
 ## Quick start (no API key needed)
 
 The scenarios replay recorded model answers, so no API key or model calls are needed.
