@@ -39,6 +39,21 @@ cover the recorded path only, not abandoned recording attempts. Greenfield's MTT
 - **`commit-message.txt`**: the generated repo's commit. It lists the approvals and ends with
   `Warden-Audit-Head: <seq> <hash>`, which ties the code to the exact audit-log state.
 
+## Known issues in this output (found by an external review)
+
+The generated code is kept exactly as produced, including two problems Warden did not catch:
+
+- `greenfield/repo/docs/architecture.md` says click counters update atomically, but
+  `src/App/Services/LinkService.cs` increments with a read-then-write (`ClickCount += 1`), which can
+  lose counts under concurrent redirects.
+- The brownfield change adds a `ShortLinkDailyClicks` table, and its generated docs describe a
+  "purely additive" "Additive Schema Migration", but there is no migration: `Program.cs` calls
+  `EnsureCreatedAsync()`, which does not add tables to an existing database. The tests start from
+  fresh databases, so they pass (see [change.diff](brownfield/change.diff)).
+
+Why they got through, and the planned fix, are in
+[ENGINEERING_SUMMARY.md](../ENGINEERING_SUMMARY.md#external-review-findings-and-responses).
+
 ## Check the audit trail yourself
 
 ```python

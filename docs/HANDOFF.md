@@ -43,7 +43,7 @@ orchestrator can start from any point (brownfield).
 
 ## 3. Status (2026-10-13): development complete
 
-All handoff items 1-9 are implemented and test-proven: 311 fast tests and 11 slow ones, with ruff and
+All handoff items 1-9 are implemented and test-proven: 325 fast tests and 11 slow ones, with ruff and
 mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 `docs/ENGINEERING_SUMMARY.md`, which also lists the 19 defects found by real runs and environment probes.
 
@@ -65,8 +65,13 @@ mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 
 1. Run `run_demo.py new` once interactively on the .NET stack for a real-model showcase of the
    discovery Q&A (it records itself).
-2. Optional improvements: container sandbox for verify; deleting files in the generated repo;
-   a test-isolation hint for generated .NET tests (the ambiguous run's tests raced on SQLite).
+2. **Open review finding: generated docs can claim what the code does not do** (see
+   ENGINEERING_SUMMARY "External review"). Planned fix: docs agent reads the code; a consistency
+   reviewer node before release; .NET prompt guidance (EF Core migrations, atomic updates). It
+   changes prompts and the graph, so greenfield and brownfield must be re-recorded (~$2-4).
+3. Optional improvements: container sandbox for verify; deleting files in the generated repo;
+   a test-isolation hint for generated .NET tests (the ambiguous run's tests raced on SQLite);
+   approval escalation to a second approver (needs new event types: ask first).
 
 Constraint for whoever continues: **changing any agent prompt, schema, input or verify output
 format invalidates recordings** for the affected calls. Re-record afterwards.

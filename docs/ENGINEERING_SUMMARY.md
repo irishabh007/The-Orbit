@@ -40,7 +40,7 @@ Two principles shaped most decisions:
 | Generated URL shortener (per run) | `runs/greenfield/repo`: ASP.NET Core + xUnit, 23 files, ~2,000 lines, 31 passing tests |
 | Committed evidence | `docs/evidence/`: reports, audit logs, specs, designs, the generated repo, the brownfield diff |
 | Per-run evidence | `runs/<scenario>/events.jsonl`, `report.md`, `metrics.json`, `spec.json`, `design.json`, `verify_report.json`, `release_review.json` |
-| Tests | `tests/`: 311 fast + 11 slow (including real dotnet build/test) |
+| Tests | `tests/`: 325 fast + 11 slow (including real dotnet build/test) |
 | Docs | `README.md`, `docs/` |
 
 ## Risks, trade-offs and how they are validated
@@ -50,6 +50,7 @@ Two principles shaped most decisions:
 | Model output is malformed or invented | Strict schemas (extra fields forbidden); cross-artifact checks (tasks cite real requirements, impact cites real modules); one repair round, then bounded retries | `test_agents.py`; real runs: invalid JSON caught by the schema check and retried, C# syntax errors caught by the build gate |
 | Generated code does not work | Verify runs the generated tests and lint; failures go back to both authors with role-specific guidance | Real .NET runs: 3 → 3 → 27 → 30 → 31 of 31 over 4 repair loops (greenfield); build error → 50/50 (brownfield); the ambiguous run exhausted its budget and stopped with nothing released |
 | Secrets or personal data leak into code or logs | Policy denies; reasons never echo the value; the child environment is scrubbed of keys; keys are never logged | Tests assert the secret is absent from the log and report; the child process cannot see the key |
+| Generated docs claim what the code does not do | **Open** (found by an external review; see below) | Planned: docs from code, a consistency reviewer before release |
 | Agents exceed their remit | Autonomy per role; protected paths need a human; agents can only add oversight; undeclared outputs are rejected | Policy and orchestrator tests; failure demos |
 | A human decision is not traceable | Approvals are linked into `caused_by` lineage; the report traces the release back to every human decision | Real run: the release lineage reaches all 13 human decisions (122 linked events) |
 | Audit log is tampered with | Hash chain (`verify()` locates the break) plus the head hash anchored in each git commit | `test_eventlog.py` forges a full rewrite that `verify()` accepts and the anchor rejects |
@@ -109,6 +110,24 @@ Two principles shaped most decisions:
 - **Cost is an estimate:** every model call's tokens are logged and priced at list price
   (`warden/llm/pricing.py`). The `greenfield-python` recordings predate thinking-token capture, so
   their reported cost (~$0.39) understates the real bill; the .NET recordings include thinking tokens.
+
+## External review: findings and responses
+
+An external review of the submission found six issues. Each was verified against the code.
+
+| Finding | Status | Response |
+|---|---|---|
+| Generated `architecture.md` says click counts update "atomically"; `LinkService.cs` does `ClickCount += 1` (read, then write), so concurrent redirects can lose counts | **Open** | Kept in the evidence as generated. See the plan below |
+| Brownfield docs describe a "purely additive" schema migration for the new table, but there is no migration: `EnsureCreatedAsync()` never adds a table to an existing database. Tests use fresh databases, so they pass, and the release reviewer approved | **Open** | Same plan; plus a brownfield verify that upgrades an existing database |
+| The docs agent works from the design only and never sees the code; no gate checks docs against code | **Open** | Planned: docs agent consumes the code and tests; a consistency-reviewer node before release whose blocking findings go back to developer and docs as feedback (bounded like the repair loop); .NET prompt guidance (EF Core migrations, `ExecuteUpdateAsync` for counters). It changes prompts and the graph, so the recorded scenarios must be re-recorded |
+| Approvals block the scheduler; no timeout | **Fixed** | `decide()` runs on an approval thread; the decision is applied on the scheduler thread; `Config.approval_timeout_s` fails the gate closed. Escalation to a second approver is not built yet (it needs new event types) |
+| Approver identity is a string; no roles; one person can approve everything | **Fixed (authorization)** | Policy `approvals`: roles per gate and separation of duties, enforced on every approval and kept across resume; console identity is the OS login. Authentication stays with the host (SSO, code review system) |
+| "Changes requested" feedback is lost on resume | **Fixed** | Pending feedback is saved in the state file and restored |
+
+The open finding is the important one: Warden verifies that generated code *works* (builds, tests
+pass), but nothing yet verifies that what the generated docs and design *claim* is true of the code.
+Passing tests on a fresh database also hid a missing schema migration, which a human reviewer
+would catch only by reading the code.
 
 ## Lessons from real runs
 

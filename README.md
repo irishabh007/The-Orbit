@@ -28,7 +28,7 @@ python run_demo.py failures                          # 8 governance demos (scrip
 python run_demo.py greenfield-python --auto-approve  # recorded run on the Python stack; needs only Python
 python run_demo.py greenfield --auto-approve         # recorded .NET run (needs the .NET 10 SDK)
 python run_demo.py new                               # your own idea -> Q&A -> approved spec -> .NET API (needs a Gemini key)
-pytest -q && pytest -q -m slow                       # 311 fast tests + 11 subprocess tests
+pytest -q && pytest -q -m slow                       # 325 fast tests + 11 subprocess tests
 ```
 
 **Recorded vs scripted.** `greenfield`, `brownfield`, `ambiguous` (.NET) and `greenfield-python`
@@ -97,6 +97,10 @@ The .NET stack needs the .NET 10 SDK; package restore needs network access the f
 
 For `--record` and `--live`, put `GEMINI_API_KEY=...` in `.env` (the file is git-ignored; see
 `.env.example`).
+
+**Policies.** `policies/default.yaml` is used unless you pass `--policy`. `policies/governed.yaml`
+adds who may approve which gate and separation of duties (for example, the person who approved the
+design may not approve the release). Your approvals are recorded under your login name.
 
 ## Documentation
 

@@ -99,7 +99,10 @@ stateDiagram-v2
    personal data, unlisted dependencies, malformed bundle) or escalate (protected path,
    `supervised` role).
 7. **Approval** if the graph, the policy or the agent asks for it. The agent can only *add*
-   oversight. Approve leads to commit; reject fails the node without retry; "changes" sends the
+   oversight. The human is asked on a separate approval thread, so the scheduler keeps running
+   other nodes; the decision is applied back on the scheduler thread. An approval must also pass
+   the policy's `approvals` rule (role for this gate, separation of duties), and an optional timeout
+   fails the gate closed. Approve leads to commit; reject fails the node without retry; "changes" sends the
    comment back as feedback for a retry.
 8. **Commit:** outputs go to the artifact store with input hashes. Content that actually changed
    triggers re-planning of the nodes that consume it.
@@ -130,6 +133,7 @@ These failures are never retried (CLAUDE.md rule 4):
 | Scope | policy `scope` | The developer may write only what the approved design (or brownfield impact analysis) contains, plus scaffolding; anything else stops for a human with the files named |
 | Controlled autonomy | policy `autonomy` per role | architect, impact, release: `supervised`; developer: `full`; unknown roles: `supervised` |
 | Human checkpoints | graph `requires_approval` | Architect and release always; spec for vague requests; impact for brownfield |
+| Who may approve | policy `approvals` (`policies/governed.yaml`) | Release needs the release-manager role; the person who approved the design may not approve the release; an unanswered gate times out as a rejection |
 | Execution safety | `tools/runner.py` | Generated code runs with an allowlisted environment (no keys) and a timeout |
 | Audit | `eventlog.py`, `tools/git.py` | Hash chain + `caused_by` lineage; the head hash is anchored in each published git commit, so even a full log rewrite is detected. The report traces the release back to every human decision and checks the anchors |
 
@@ -138,7 +142,7 @@ These failures are never retried (CLAUDE.md rule 4):
 | Decision | Choice | Why | Alternatives |
 |---|---|---|---|
 | Orchestration | Own scheduler over an explicit DAG with a transition table | The brief grades the orchestrator; governance needs every transition visible and enforced | LangGraph, Temporal, Airflow: more machinery, less control over the governance semantics |
-| Concurrency | Thread pool for agents, a single scheduler thread for state | Parallel I/O-bound agents without locks on node state | asyncio (fine, but no gain for blocking HTTP and subprocess calls) |
+| Concurrency | Thread pool for agents, a separate approval thread for humans, a single scheduler thread for state | Parallel I/O-bound agents and a waiting human never block each other; no locks on node state | asyncio (fine, but no gain for blocking HTTP and subprocess calls) |
 | Commit model | Agents return staged outputs; the orchestrator commits after gates, policy and approval | A failed or discarded attempt has nothing to undo | Agents writing directly, which needs compensation logic |
 | Lineage | Content-hashed artifacts with input hashes | Precise re-planning; unchanged outputs stop cascades | Timestamps or version counters (over-invalidate) |
 | Audit | Hash-chained JSONL with `caused_by` | Tamper-evident and readable with standard tools | A database (heavier; same evidence) |

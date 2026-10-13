@@ -112,7 +112,7 @@ Anything outside the plan you approved comes back to you first.
 pytest -q && pytest -q -m slow && ruff check . && mypy warden demo run_demo.py
 ```
 
-These run 311 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`, and
+These run 325 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`, and
 a recorded run replayed end to end with the real generated tests executing). Then skim:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): state machine, per-attempt control flow, bounded failure
