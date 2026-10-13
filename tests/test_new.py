@@ -155,6 +155,23 @@ class CliNewTests(unittest.TestCase):
         self.assertEqual(scenario.name, "todo-service")
         self.assertIn("A todo API", scenario.request)
 
+    def test_approver_is_the_logged_in_user_and_the_policy_can_be_chosen(self) -> None:
+        import getpass
+        from unittest import mock
+
+        from demo import cli
+        self.assertEqual(cli._parser().parse_args(["greenfield"]).approver, getpass.getuser())
+        seen: dict[str, Any] = {}
+
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            return mock.Mock(summary=mock.Mock(state=RunState.SUCCEEDED))
+
+        governed = Path(cli.ROOT) / "policies" / "governed.yaml"
+        with mock.patch.object(cli, "run_scenario", fake_run), mock.patch("sys.stdout", io.StringIO()):
+            cli.main(["greenfield", "--auto-approve", "--policy", str(governed)])
+        self.assertEqual(seen["policy_path"], governed)
+
     def test_without_a_key_or_recording_it_explains_and_calls_no_model(self) -> None:
         from unittest import mock
 

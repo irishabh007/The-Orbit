@@ -18,6 +18,14 @@ retrying a policy violation just burns budget.
                        list; anything else escalates to a human (or is denied in deny mode).
 * ``autonomy``         per agent role: ``full`` (auto-commit), ``supervised`` (commit needs
                        human approval) or ``none`` (denied before running).
+* ``approvals``        who may decide which gate: ``roles`` (role -> people), ``gates`` (node ->
+                       roles that may approve it; unlisted gates need any role) and ``separate``
+                       (gate pairs one person may not both approve: separation of duties).
+                       Without this section any approver is accepted. Identities are taken as
+                       given: authenticating them is the host's job (SSO, a code-review system).
+
+A policy file may start with ``extends: <file>``: it inherits that file's sections and
+replaces the ones it defines.
 
 Outputs named ``*.bundle`` (see ``warden.bundle``) are expanded and every rule sees
 each inner file (reported as ``code.bundle:app/x.py``); a malformed bundle is denied.
@@ -62,6 +70,9 @@ class Policy(Protocol):
     def check_post(self, node: NodeSpec, result: AgentResult,
                    inputs: Mapping[str, str] | None = None) -> PolicyDecision: ...
 
+    # may ``approver`` approve this gate? ``decided``: gate -> who approved it earlier in the run
+    def check_approval(self, node: NodeSpec, approver: str, decided: Mapping[str, str]) -> PolicyDecision: ...
+
 
 class AllowAllPolicy:
     def check_pre(self, node: NodeSpec, ctx: AgentContext) -> PolicyDecision:
@@ -71,6 +82,9 @@ class AllowAllPolicy:
                    inputs: Mapping[str, str] | None = None) -> PolicyDecision:
         return PolicyDecision()
 
+    def check_approval(self, node: NodeSpec, approver: str, decided: Mapping[str, str]) -> PolicyDecision:
+        return PolicyDecision()
+
 
 # --------------------------------------------------------------------------- YAML engine
 class PolicyError(ValueError):
@@ -78,7 +92,8 @@ class PolicyError(ValueError):
 
 
 AUTONOMY_LEVELS = ("full", "supervised", "none")
-_TOP_KEYS = {"version", "secrets", "compliance", "dependencies", "protected_paths", "autonomy", "scope"}
+_TOP_KEYS = {"version", "extends", "secrets", "compliance", "dependencies", "protected_paths", "autonomy",
+             "scope", "approvals"}
 _REQ_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _COMMENT = re.compile(r"(^|\s)#.*")
 
@@ -185,6 +200,31 @@ def _section(raw: dict[str, Any], key: str, allowed: set[str]) -> dict[str, Any]
     return value
 
 
+@dataclass(frozen=True)
+class ApprovalRule:
+    holders: dict[str, frozenset[str]]  # role -> people
+    gates: dict[str, frozenset[str]]  # gate (node id) -> roles that may approve it
+    separate: tuple[frozenset[str], ...]  # gate pairs that need two different people
+
+
+def _approval_rule(raw: dict[str, Any]) -> ApprovalRule | None:
+    if not raw:
+        return None
+    roles = raw.get("roles", {})
+    gates = raw.get("gates", {})
+    if not isinstance(roles, dict) or not isinstance(gates, dict):
+        raise PolicyError("approvals.roles and approvals.gates: expected mappings")
+    holders = {str(r): frozenset(_str_list(people, f"approvals.roles.{r}")) for r, people in roles.items()}
+    allowed = {str(g): frozenset(_str_list(rs, f"approvals.gates.{g}")) for g, rs in gates.items()}
+    for gate, rs in allowed.items():
+        if unknown := sorted(rs - holders.keys()):
+            raise PolicyError(f"approvals.gates.{gate}: unknown role(s) {unknown}")
+    pairs = raw.get("separate", [])
+    if not isinstance(pairs, list) or any(len(set(_str_list(pr, "approvals.separate"))) != 2 for pr in pairs):
+        raise PolicyError("approvals.separate: expected a list of [gate, gate] pairs")
+    return ApprovalRule(holders, allowed, tuple(frozenset(pr) for pr in pairs))
+
+
 def _str_list(value: Any, where: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise PolicyError(f"{where}: expected a list of strings")
@@ -203,8 +243,10 @@ class YamlPolicy:
         pii_patterns: dict[str, tuple[re.Pattern[str], bool]] | None = None,  # name -> (regex, luhn)
         nuget_packages: set[str] | None = None,  # allowlist for *.csproj PackageReference (normalized)
         scope: ScopeRule | None = None,
+        approvals: ApprovalRule | None = None,
     ) -> None:
         self.scope = scope
+        self.approvals = approvals
         self.secret_patterns = secret_patterns
         self.pii_patterns = pii_patterns or {}
         self.nuget_packages = nuget_packages or set()
@@ -217,11 +259,23 @@ class YamlPolicy:
     # ---- loading -------------------------------------------------------
     @classmethod
     def from_file(cls, path: str | Path) -> YamlPolicy:
+        return cls.from_dict(cls._read(Path(path)))
+
+    @classmethod
+    def _read(cls, path: Path, seen: tuple[Path, ...] = ()) -> Any:
+        """The file's rules, on top of the file it ``extends`` (its sections replace the base's)."""
+        if path.resolve() in seen:
+            raise PolicyError(f"{path}: circular 'extends'")
         try:
-            raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            raise PolicyError(f"{path}: invalid YAML: {exc}") from exc
-        return cls.from_dict(raw)
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise PolicyError(f"{path}: cannot load: {exc}") from exc
+        if not isinstance(raw, dict) or "extends" not in raw:
+            return raw
+        base = cls._read(path.parent / str(raw["extends"]), (*seen, path.resolve()))
+        if not isinstance(base, dict):
+            raise PolicyError(f"{path}: the policy it extends must be a mapping")
+        return {**base, **{k: v for k, v in raw.items() if k != "extends"}}
 
     @classmethod
     def from_dict(cls, raw: Any) -> YamlPolicy:
@@ -254,12 +308,33 @@ class YamlPolicy:
             if level not in AUTONOMY_LEVELS:
                 raise PolicyError(f"{where}: unknown autonomy level {level!r}, expected one of {AUTONOMY_LEVELS}")
 
+        approvals = _approval_rule(_section(raw, "approvals", {"roles", "gates", "separate"}))
         return cls(patterns, manifests, allowed, protected, default, {str(k): v for k, v in roles.items()},
-                   pii_patterns=pii, nuget_packages=nuget, scope=scope)
+                   pii_patterns=pii, nuget_packages=nuget, scope=scope, approvals=approvals)
 
     # ---- checks --------------------------------------------------------
     def autonomy(self, role: str) -> str:
         return self.autonomy_roles.get(role, self.default_autonomy)
+
+    def check_approval(self, node: NodeSpec, approver: str, decided: Mapping[str, str]) -> PolicyDecision:
+        rule = self.approvals
+        if rule is None:
+            return PolicyDecision()
+        held = {role for role, people in rule.holders.items() if approver in people}
+        needed = rule.gates.get(node.id)
+        if needed is not None and not held & needed:
+            return PolicyDecision(False, rule="approvals",
+                                  reason=f"{approver!r} may not approve {node.id!r}: needs role {sorted(needed)}")
+        if needed is None and not held:
+            return PolicyDecision(False, rule="approvals", reason=f"{approver!r} holds no approver role")
+        for pair in rule.separate:
+            if node.id in pair:
+                (other,) = pair - {node.id}
+                if decided.get(other) == approver:
+                    return PolicyDecision(False, rule="approvals",
+                                          reason=f"separation of duties: {approver!r} already approved "
+                                                 f"{other!r}, so may not also approve {node.id!r}")
+        return PolicyDecision()
 
     def check_pre(self, node: NodeSpec, ctx: AgentContext) -> PolicyDecision:
         level = self.autonomy(node.agent)

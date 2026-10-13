@@ -1,0 +1,24 @@
+# The default rules plus who may approve what. Use it with:
+#   python run_demo.py new --policy policies/governed.yaml
+# The people below are placeholders: in production the role membership comes from the
+# organisation's directory (SSO groups), which also authenticates them. Warden enforces the
+# rules on whatever identity the approval channel reports.
+extends: default.yaml
+
+approvals:
+  roles:
+    product-owner: [po]
+    tech-lead: [lead]
+    release-manager: [rm]
+  # gate (graph node) -> roles that may approve it; a gate not listed needs any role above
+  gates:
+    requirements: [product-owner]
+    impact: [tech-lead]
+    architect: [tech-lead]
+    developer: [tech-lead]
+    tester: [tech-lead]
+    release: [release-manager]
+  # one person may not approve both gates of a pair
+  separate:
+    - [architect, release]
+    - [developer, release]

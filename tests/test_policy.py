@@ -456,3 +456,89 @@ class OrchestratorIntegrationTests(unittest.TestCase):
         self.assertEqual(summary.state, RunState.FAILED)
         self.assertEqual(self.calls, 0)
         self.assertEqual(self.events(EventType.RETRY_SCHEDULED), [])
+
+
+APPROVALS = {
+    "roles": {"tech-lead": ["alice"], "release-manager": ["bob", "alice"], "product-owner": ["carol"]},
+    "gates": {"architect": ["tech-lead"], "release": ["release-manager"]},
+    "separate": [["architect", "release"]],
+}
+
+
+class ApprovalRuleTests(unittest.TestCase):
+    """Review finding: any string could approve any gate, and one person could approve them all."""
+
+    def setUp(self) -> None:
+        self.policy = YamlPolicy.from_dict(rules(approvals=APPROVALS))
+
+    def check(self, gate: str, who: str, decided: dict[str, str] | None = None) -> Any:
+        return self.policy.check_approval(NodeSpec(gate, gate), who, decided or {})
+
+    def test_only_holders_of_the_gate_role_may_approve(self) -> None:
+        self.assertTrue(self.check("architect", "alice").allow)
+        denied = self.check("architect", "carol")
+        self.assertFalse(denied.allow)
+        self.assertEqual(denied.rule, "approvals")
+        self.assertIn("tech-lead", denied.reason)
+
+    def test_unlisted_gates_accept_any_known_approver_but_not_strangers(self) -> None:
+        self.assertTrue(self.check("requirements", "carol").allow)
+        self.assertFalse(self.check("requirements", "mallory").allow)  # holds no role at all
+
+    def test_separation_of_duties(self) -> None:
+        # alice may approve releases, but not a release whose design she approved herself
+        self.assertFalse(self.check("release", "alice", {"architect": "alice"}).allow)
+        self.assertTrue(self.check("release", "bob", {"architect": "alice"}).allow)
+
+    def test_no_approvals_section_means_no_restriction(self) -> None:
+        self.assertTrue(YamlPolicy.from_dict(rules()).check_approval(NodeSpec("x", "x"), "anyone", {}).allow)
+
+    def test_malformed_rules_fail_closed(self) -> None:
+        for bad in ({"gates": {"release": ["no-such-role"]}, "roles": {}},
+                    {"roles": {"lead": "alice"}},
+                    {"separate": [["architect"]]},
+                    {"who": {}}):
+            with self.subTest(bad=bad), self.assertRaises(PolicyError):
+                YamlPolicy.from_dict(rules(approvals=bad))
+
+    def test_governed_policy_extends_the_default_and_enforces_approvals(self) -> None:
+        governed = YamlPolicy.from_file(DEFAULT_POLICY.parent / "governed.yaml")
+        default = YamlPolicy.from_file(DEFAULT_POLICY)
+        self.assertEqual(governed.protected_paths, default.protected_paths)  # inherited
+        self.assertFalse(governed.check_approval(NodeSpec("release", "release"), "auto-approve", {}).allow)
+
+
+class ApprovalEnforcementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.store = ArtifactStore(root / "artifacts")
+        self.log = EventLog(root / "events.jsonl")
+        self.addCleanup(self.log.close)
+
+    def run_graph(self, decisions: dict[str, str]) -> Any:
+        from warden.approval import ApprovalDecision
+        graph = Graph([NodeSpec("architect", "architect", produces=("design",), requires_approval=True),
+                       NodeSpec("release", "release", ("architect",), ("design",), ("ok",), requires_approval=True)])
+        agents = {n: FunctionAgent(n, lambda ctx, n=n: AgentResult({"design" if n == "architect" else "ok": n}))
+                  for n in ("architect", "release")}
+        approver = ScriptedApprover({gate: [ApprovalDecision("approve", who)] for gate, who in decisions.items()})
+        return Orchestrator(graph, agents, self.store, self.log, "run1",
+                            policy=YamlPolicy.from_dict(rules(approvals=APPROVALS)), approver=approver).run()
+
+    def test_authorized_and_separate_approvers_succeed(self) -> None:
+        self.assertEqual(self.run_graph({"architect": "alice", "release": "bob"}).state, RunState.SUCCEEDED)
+
+    def test_unauthorized_approval_fails_closed_and_commits_nothing(self) -> None:
+        summary = self.run_graph({"architect": "carol", "release": "bob"})
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertIn("tech-lead", summary.reason)
+        self.assertIsNone(self.store.latest("design"))
+        self.assertEqual([e for e in self.log.read_all() if e.type == EventType.RETRY_SCHEDULED.value], [])
+
+    def test_one_person_cannot_approve_both_design_and_release(self) -> None:
+        summary = self.run_graph({"architect": "alice", "release": "alice"})
+        self.assertEqual(summary.state, RunState.FAILED)
+        self.assertIsNone(self.store.latest("ok"))
+        self.assertIn("separation of duties", summary.reason)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -12,6 +13,7 @@ from demo.console import read_idea
 from demo.failures import CASES, run_case
 from demo.newproject import new_project_scenario
 from demo.runner import (
+    DEFAULT_POLICY,
     REQUESTS,
     ROOT,
     BaselineMissing,
@@ -27,6 +29,13 @@ from warden.stacks import DEFAULT_NEW_PROJECT_STACK, STACKS, get_stack
 RECORDINGS = ROOT / "recordings"
 
 
+def _login() -> str:
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError):  # no login name (some containers): fall back to a neutral name
+        return "reviewer"
+
+
 def _parser() -> argparse.ArgumentParser:
     scenarios = sorted(p.stem for p in REQUESTS.glob("*.md"))
     p = argparse.ArgumentParser(prog="run_demo.py", description="Run a Warden demo scenario end to end.")
@@ -40,7 +49,11 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--live", action="store_true", help="always call Gemini, record nothing")
     p.add_argument("--auto-approve", action="store_true",
                    help="grant every approval gate automatically (demo only; default asks you)")
-    p.add_argument("--approver", default="reviewer", help="name recorded for your approvals")
+    p.add_argument("--approver", default=_login(),
+                   help="identity recorded for your approvals (default: your login name)")
+    p.add_argument("--policy", type=Path, default=DEFAULT_POLICY,
+                   help="policy file (default: policies/default.yaml; policies/governed.yaml also "
+                        "restricts who may approve which gate)")
     p.add_argument("--out", type=Path, default=ROOT / "runs", help="output directory (default: runs/)")
     new = p.add_argument_group("new project (with 'new')")
     new.add_argument("--request-file", type=Path, help="read the idea from this file instead of typing it")
@@ -140,7 +153,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             llm, mode = _model(args, args.scenario)
         _explain_approvals(scenario, args.auto_approve)
         approver = scenario_approver(scenario, auto=args.auto_approve, name=args.approver)
-        result = run_scenario(scenario, args.out / scenario.name, llm, approver, mode=mode)
+        result = run_scenario(scenario, args.out / scenario.name, llm, approver, mode=mode,
+                              policy_path=args.policy)
         succeeded = result.summary.state == RunState.SUCCEEDED
         if args.prune:
             _prune(llm, succeeded)

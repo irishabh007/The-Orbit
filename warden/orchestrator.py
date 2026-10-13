@@ -110,6 +110,7 @@ class Orchestrator:
                     raise ValueError(f"node {n.id} references unknown agent {name!r}")
         self._rec: dict[str, NodeRecord] = {i: NodeRecord() for i in graph.nodes}
         self._feedback: dict[str, str] = {}
+        self._approved_by: dict[str, str] = {}  # gate -> who approved it (separation of duties)
         self._blocked: dict[str, str] = {}
         self._steps = 0
         self._halt = False
@@ -421,6 +422,14 @@ class Orchestrator:
             self._fail(nid, f"changes requested by {decision.approver}: {decision.comment}")
             return
         spec = self.graph.nodes[nid]
+        # anyone may stop work, but only an authorized, independent person may let it through
+        authz = self.policy.check_approval(spec, decision.approver, dict(self._approved_by))
+        self._log(EventType.POLICY_CHECK, nid,
+                  {"phase": "approval", "allow": authz.allow, "rule": authz.rule, "reason": authz.reason,
+                   "approver": decision.approver}, self._own(nid))
+        if not authz.allow:
+            self._fail(nid, f"policy {authz.rule or 'denied'}: {authz.reason}", retryable=False)
+            return
         current = {c: (a.sha256 if (a := self.store.latest(c)) else None) for c in spec.consumes}
         if current != pending.snapshot:  # inputs moved while the human was deciding
             self._rec[nid].attempts -= 1
@@ -428,6 +437,7 @@ class Orchestrator:
                       self._own(nid))
             self._fail(nid, "inputs changed while awaiting approval", requeue_only=True)
             return
+        self._approved_by[nid] = decision.approver
         self._commit(nid, pending.result, pending.duration_ms)
 
     def _next_deadline(self) -> float | None:
@@ -546,7 +556,8 @@ class Orchestrator:
             return
         payload = {i: {"state": r.state.value, "attempts": r.attempts, "used_fallback": r.used_fallback,
                        "held": r.held, "committed": r.committed, "last_event": r.last_event,
-                       "replans": r.replans, "feedback": self._feedback.get(i)}
+                       "replans": r.replans, "feedback": self._feedback.get(i),
+                       "approved_by": self._approved_by.get(i)}
                    for i, r in self._rec.items()}
         atomic_write(self._state_path, json.dumps(payload, indent=2, sort_keys=True))
 
@@ -561,3 +572,5 @@ class Orchestrator:
                                             d.get("replans", 0))  # absent in older state files
                 if d.get("feedback"):  # a human's "changes requested" comment survives a crash
                     self._feedback[nid] = d["feedback"]
+                if d.get("approved_by"):  # separation of duties holds across a resume
+                    self._approved_by[nid] = d["approved_by"]
