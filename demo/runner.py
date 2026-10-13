@@ -62,7 +62,10 @@ class Scenario:
 
 
 # scenario -> (baseline snapshot under demo/baselines, graph); others are greenfield-shaped
-_BROWNFIELD = {"brownfield": ("url-shortener-dotnet", brownfield_graph)}
+# scenario -> (existing app snapshot in demo/baselines/, graph). "harden" was recorded with the
+# consistency review; the earlier recordings keep the graphs they were made with.
+_BROWNFIELD: dict[str, tuple[str, Callable[[], Graph]]] = {"brownfield": ("url-shortener-dotnet", brownfield_graph),
+               "harden": ("url-shortener-dotnet-analytics", partial(brownfield_graph, review=True))}
 # Every scenario builds a .NET product except this one, kept to show the stacks are pluggable
 # (and because its real-model recordings were made with the Python stack).
 _PYTHON_SCENARIOS = {"greenfield-python"}

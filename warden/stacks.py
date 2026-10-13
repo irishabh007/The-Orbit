@@ -128,7 +128,7 @@ being written in parallel, so rely only on that contract. Constraints: {DOTNET_C
 """
 
 
-_LOST_UPDATE = re.compile(r"\b\w+\.\w*Count\w*\s*(?:\+=\s*1\b|\+\+)")
+_LOST_UPDATE = re.compile(r"\b\w+\.\w*(?:Count|Clicks|Hits|Visits)\w*\s*(?:\+=\s*1\b|\+\+)")
 _ENSURE_CREATED = re.compile(r"\bEnsureCreated(?:Async)?\s*\(")
 
 

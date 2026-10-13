@@ -157,12 +157,12 @@ BROWNFIELD_IMPACT = {
 }
 
 
-def fixture_baseline(directory: Path) -> None:
+def fixture_baseline(directory: Path, name: str = "url-shortener-dotnet") -> None:
     """A .NET 'existing app' (the scripted API, tests and README) as the brownfield baseline."""
     files = {**{f["path"]: f["content"] for f in DOTNET_CODE["files"]},
              **{f["path"]: f["content"] for f in DOTNET_TESTS["files"]}, "README.md": "# Shortener\n"}
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "url-shortener-dotnet.json").write_text(pack(files), encoding="utf-8")
+    (directory / f"{name}.json").write_text(pack(files), encoding="utf-8")
 
 
 class AmbiguousScenarioTests(TmpCase):
@@ -202,6 +202,16 @@ class BrownfieldScenarioTests(TmpCase):
         patcher = mock.patch.object(runner, "BASELINES", self.root / "baselines")
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_harden_fixes_the_analytics_app_under_consistency_review(self) -> None:
+        # review finding: lost click counts and a missing migration; Warden fixes its own output
+        fixture_baseline(self.root / "baselines", name="url-shortener-dotnet-analytics")
+        scenario = load_scenario("harden")
+        graph = scenario.graph()
+        self.assertIn("reviewer", graph.nodes)
+        self.assertEqual(graph.order[0], "scan")
+        self.assertIn("EnsureCreated", scenario.request)
+        self.assertIsNotNone(scenario.baseline)
 
     def run_brownfield(self, approver: ScriptedApprover, publish: bool = False):  # type: ignore[no-untyped-def]
         clients = {**scripted_clients(), "impact": ScriptedClient([], default=js(BROWNFIELD_IMPACT))}

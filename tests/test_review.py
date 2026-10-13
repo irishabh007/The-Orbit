@@ -80,6 +80,11 @@ class DotnetReviewRuleTests(unittest.TestCase):
         self.assertIn("src/App/Services/LinkService.cs:5", found["evidence"])
         self.assertIn("ExecuteUpdateAsync", found["fix"])
 
+    def test_any_click_or_hit_counter_counts(self) -> None:
+        # the brownfield output also had `dailyClick.Clicks += 1`
+        found = self.rules({"src/App/Services/LinkService.cs": "dailyClick.Clicks += 1;\nhit.Visits++;\n"})
+        self.assertEqual([f["evidence"].split(":")[1] for f in found], ["1", "2"])
+
     def test_ensure_created_is_flagged_because_it_never_upgrades_a_database(self) -> None:
         (found,) = self.rules({"src/App/Program.cs": "await db.Database.EnsureCreatedAsync();\n"})
         self.assertIn("src/App/Program.cs:1", found["evidence"])
