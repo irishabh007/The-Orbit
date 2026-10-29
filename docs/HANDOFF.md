@@ -41,7 +41,7 @@ orchestrator can start from any point (brownfield).
 | CI | GitHub Actions on Ubuntu + Windows: fresh install, lint, types, tests, demos |
 | Claims | Narrow and defensible: governed, reviewed, tested output with a human release decision; **not** "production-ready". An external review found two bugs the gates missed (README "Known gap") |
 
-## 3. Status (2026-10-13): development complete
+## 3. Status (2026-10-30): development complete; all four .NET scenarios recorded
 
 All handoff items 1-9 are implemented and test-proven: 325 fast tests and 11 slow ones, with ruff and
 mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
