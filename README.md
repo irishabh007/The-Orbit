@@ -56,12 +56,13 @@ pip install -r requirements-demo.txt -r requirements-dev.txt
 python run_demo.py failures                          # 8 governance demos (scripted, no model): retry, rollback, policy, re-plan...
 python run_demo.py greenfield-python --auto-approve  # recorded run on the Python stack; needs only Python
 python run_demo.py greenfield --auto-approve         # recorded .NET run (needs the .NET 10 SDK)
+python run_demo.py harden --auto-approve             # Warden fixes defects in its own output, under consistency review
 python run_demo.py new                               # your own idea -> Q&A -> approved spec -> .NET API (needs a Gemini key)
-pytest -q && pytest -q -m slow                       # 325 fast tests + 11 subprocess tests
+pytest -q && pytest -q -m slow                       # 344 fast tests + 11 subprocess tests
 ```
 
-**Recorded vs scripted.** `greenfield`, `brownfield`, `ambiguous` (.NET) and `greenfield-python`
-replay real gemini-3.8-flash sessions; the verify step really builds and tests the generated code
+**Recorded vs scripted.** `greenfield`, `brownfield`, `ambiguous`, `harden` (.NET) and
+`greenfield-python` replay real gemini-3.8-flash sessions; the verify step really builds and tests the generated code
 each time. `failures` uses scripted agents so each failure path is shown deterministically.
 `new` calls the model live. `--auto-approve` stands in for the human at every gate; leave it out to
 decide yourself.
@@ -102,9 +103,9 @@ All of it, unedited, is in [docs/evidence/](docs/evidence/).
 | `run_demo.py new` | **Your own idea**, interactively: type it (or `--request-file`), answer clarifying questions one at a time, approve the readable spec (then locked) and plan; Warden builds an ASP.NET Core API + xUnit tests, verified with `dotnet build`/`dotnet test`; nothing outside the approved plan lands without your approval | Live Gemini, recorded for replay |
 | `run_demo.py failures` | Policy block, human rejection, retry → fallback → recovery or rollback, safe-stop, re-plan after a requirement change, human rollback of a shipped feature, resume mid-graph from existing artifacts | Scripted (no model needed) |
 
-Details for each scenario are in [docs/SCENARIOS.md](docs/SCENARIOS.md). The unedited output of the three
-recorded .NET runs (reports, audit logs, specs, designs, the generated repo, the brownfield diff) is in
-[docs/evidence/](docs/evidence/).
+Details for each scenario are in [docs/SCENARIOS.md](docs/SCENARIOS.md). The unedited output of the four
+recorded .NET runs (reports, audit logs, specs, designs, consistency review, the generated repos and
+the brownfield and harden diffs) is in [docs/evidence/](docs/evidence/).
 
 ## Technology of generated projects
 
@@ -150,8 +151,9 @@ design may not approve the release). Your approvals are recorded under your logi
 warden/            core (standard library + PyYAML): orchestrator, graph, state machine, audit log,
                    artifact store, policy engine, report; adapters: llm/ (httpx), agents/ (pydantic)
 warden/tools/      workspace writer, scrubbed command runner, verify node, codebase scanner, git
-demo/              scenarios, console approver, failure demos, brownfield baseline
-policies/          default.yaml: security, compliance, change control, autonomy per role
+demo/              scenarios, console approver, failure demos, brownfield baselines
+policies/          default.yaml: security, compliance, change control, scope, autonomy per role;
+                   governed.yaml: default plus who may approve which gate (separation of duties)
 recordings/        recorded model answers for offline replay
 tests/             unit, integration and end-to-end tests (`-m slow`: real subprocesses)
 ```

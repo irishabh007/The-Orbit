@@ -1,4 +1,4 @@
-# Reviewer walkthrough (about 10 minutes)
+# Reviewer walkthrough (about 12 minutes)
 
 A guided tour: what to run, where to look, and which evaluation criterion each step addresses.
 No API key is needed: recorded model answers replay offline. Setup is the quick start in the
@@ -47,12 +47,33 @@ Then look at the output itself: `runs/greenfield/repo` (committed copy:
 [evidence/greenfield/repo](evidence/greenfield/repo/)) is a plain .NET solution (ASP.NET Core API,
 31 xUnit tests, README, docs) with no dependency on Warden; `dotnet test tests` runs on its own.
 `git log` shows one commit listing the requirements, the approvals, and the `Warden-Audit-Head`
-trailer. The other two scenarios are in [evidence/](evidence/): brownfield (with the diff against
-the existing app) and ambiguous (a bounded, safe failure).
+trailer. The other three scenarios are in [evidence/](evidence/): brownfield (with the diff against
+the existing app), ambiguous (a bounded, safe failure) and harden (step 3).
 
 *Criteria: realism and quality of outputs; audit-grade observability.*
 
-## 3. Break things on purpose (2 min)
+## 3. Watch Warden catch and fix its own bugs (2 min)
+
+```bash
+python run_demo.py harden --auto-approve
+```
+
+An external review found two defects in the earlier output that every test had passed (lost click
+counts under concurrency; a schema change with no migration). This run asks Warden to fix them, with
+the **consistency review** before release. Look for:
+
+- `verify` failing on the new legacy-database upgrade test (49 of 52), then passing 52 of 52.
+- `reviewer` failing with **2 blocking findings after all tests passed** (a remaining
+  `EnsureCreated` and a read-then-write daily counter), routed to the developer only (`REPLAN`
+  with `feedback_to: ["developer"]`).
+- The second review finding nothing, then release.
+
+Evidence: [evidence/harden/](evidence/harden/) (`review.json`, `change.diff`, the generated repo:
+52/52 with plain `dotnet test tests`).
+
+*Criteria: validation and risk rigor; engineering judgment.*
+
+## 4. Break things on purpose (2 min)
 
 ```bash
 python run_demo.py failures
@@ -72,7 +93,7 @@ There are eight scripted cases, all running through the real orchestrator, polic
 
 Each case writes its own `runs/failures/<case>/report.md`.
 
-## 4. Be the human (1 min)
+## 5. Be the human (1 min)
 
 ```bash
 python run_demo.py greenfield-python
@@ -94,25 +115,26 @@ recording yet, so replay stops with a clear message (`--record` with a key explo
 
 *Criterion: humans own oversight, approvals and final quality.*
 
-## 5. Build your own idea (optional, needs a key, ~10 min)
+## 6. Build your own idea (optional, needs a key, ~10 min)
 
 ```bash
 python run_demo.py new
 ```
 
 Type a vague idea, answer the questions one at a time, and approve the spec and the plan. Warden
-then builds an ASP.NET Core API with xUnit tests and verifies it with `dotnet build`/`dotnet test`.
-Anything outside the plan you approved comes back to you first.
+then builds an ASP.NET Core API with xUnit tests, verifies it with `dotnet build`/`dotnet test`, and
+runs the consistency review before release. Anything outside the plan you approved comes back to you
+first.
 
 *Criteria: requirement understanding; controlled autonomy; realism of outputs.*
 
-## 6. Check the engineering (2 min)
+## 7. Check the engineering (2 min)
 
 ```bash
 pytest -q && pytest -q -m slow && ruff check . && mypy warden demo run_demo.py
 ```
 
-These run 325 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`, and
+These run 344 fast tests plus 11 subprocess tests (including real `dotnet build`/`dotnet test`, and
 a recorded run replayed end to end with the real generated tests executing). Then skim:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): state machine, per-attempt control flow, bounded failure
@@ -133,3 +155,5 @@ judgment.*
 | Can I trust the numbers? | They come from the hash-chained log; `python -m warden.report runs/greenfield/events.jsonl` recomputes them |
 | Can a human undo things? | `human-rollback` demo; git revert per feature |
 | How does it handle existing code? | Brownfield: scanner, grounded impact analysis, human sign-off, SCENARIOS §2 |
+| What if the docs claim something the code doesn't do? | Consistency review: docs from the code, a reviewer agent plus deterministic rules; the `harden` run (step 3) |
+| Who may approve what? | `policies/governed.yaml`: roles per gate and separation of duties; ARCHITECTURE "Governance" |

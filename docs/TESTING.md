@@ -3,7 +3,7 @@
 ## How to run
 
 ```bash
-pytest -q              # 325 fast tests, deterministic (budget: <5s on an idle machine)
+pytest -q              # 344 fast tests, deterministic (budget: <5s on an idle machine)
 pytest -q -m slow      # 11 tests with real subprocesses: pytest, ruff, git, dotnet build/test, report CLI, recorded replay
 ruff check .           # lint
 mypy warden demo run_demo.py
@@ -16,10 +16,12 @@ All four must pass before every commit (CLAUDE.md).
 | Layer | What it proves | Examples |
 |---|---|---|
 | Unit | Each building block on its own | Transition table, hash chain and tamper detection, artifact lineage and staleness, graph validation, policy rules, bundle path safety, scanner, metrics math with an exact fake clock |
-| Orchestrator integration | Governance behaviour with scripted agents | Parallel branches really run concurrently (barrier); joins; retry → fallback → rollback; approvals fail closed; policy denials and rejections never retried; repair loops bounded; safe-stop; re-plan precision; crash recovery; feedback kept across retries; lineage reaches human decisions |
+| Orchestrator integration | Governance behaviour with scripted agents | Parallel branches really run concurrently (barrier); joins; retry → fallback → rollback; approvals fail closed; a pending approval does not block parallel work; an unanswered approval times out closed; policy denials and rejections never retried; repair loops bounded and routed to the node at fault; safe-stop; re-plan precision; crash recovery, including human feedback kept across a resume; lineage reaches human decisions |
+| Governance policy | Who may decide what | Approval roles per gate and separation of duties enforced (and malformed rules refused); `extends:` inheritance; secrets, PII, dependency, scope and autonomy rules |
+| Consistency review | Docs and design must be true of the code | Deterministic .NET rules flag read-then-write counters and `EnsureCreated` (including in the recorded output); findings must cite real files; blocking findings go to their owner only; docs agent told to describe the code (`tests/test_review.py`) |
 | Agents | Strict outputs and grounding | Schema violations repaired once then rejected; tasks must cite real requirements; impact cannot modify modules that do not exist; role-scoped file paths; syntax errors caught in the agent |
 | Pipeline | All agents through the real orchestrator and default policy | Greenfield end to end; ambiguous Q&A re-plan; failed verification routes to developer and tester |
-| Scenarios and demos | What a reviewer runs | Greenfield, brownfield, ambiguous (scripted answers); all eight failure/control demos; reports written |
+| Scenarios and demos | What a reviewer runs | Greenfield, brownfield, ambiguous, harden (scripted answers); all eight failure/control demos; reports written; a second run cannot wipe a run in progress |
 | Slow (real processes) | Tools work for real | Generated tests run under pytest, git commit and revert, scrubbed environment hides keys from child processes, **the recorded `greenfield-python` run replays offline to a verified release** |
 | Architecture rules | The working agreement is enforced | Core imports only stdlib + PyYAML; adapters are the only third-party users; the verify interpreter has every package the policy allows |
 
@@ -41,7 +43,7 @@ the call `replay-nearest`. Anything less similar is still a miss (`tests/test_ll
 
 Running against the real model exposed defects that scripted tests had missed. Each was fixed
 with a regression test; the list is in [ENGINEERING_SUMMARY.md](ENGINEERING_SUMMARY.md#lessons-from-real-runs).
-That is also why a recorded replay is part of the test suite. The three .NET recordings were each
+That is also why a recorded replay is part of the test suite. The four .NET recordings were each
 replayed offline (twice, with identical outcomes) before being committed; their unedited output is in
 [evidence/](evidence/).
 

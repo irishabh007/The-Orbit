@@ -123,8 +123,10 @@ the session is recorded to `recordings/<project>/` so it can be replayed.
    scope). Approving **locks** it: a later change re-runs requirements and needs approval again.
 4. **Plan approval:** a readable design (components, endpoints, decisions, tasks traced to
    requirements).
-5. **Build:** developer, tester and docs work in parallel on the .NET stack. Verify runs
-   `dotnet build` and `dotnet test`, and failures route back as in greenfield.
+5. **Build:** developer and tester work in parallel on the .NET stack. Verify runs
+   `dotnet build` and `dotnet test`, and failures route back as in greenfield. The docs are then
+   written from the verified code, and the **consistency review** checks them and the design against
+   the code before release (see §5).
 6. **Guardrails:** project files and settings are protected paths, and NuGet packages are
    allowlisted. The **scope** rule stops anything outside the approved plan for your decision.
 7. **Release:** your final call. Then one git commit with the audit-head anchor.

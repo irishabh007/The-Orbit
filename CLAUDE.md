@@ -19,7 +19,7 @@ autonomy boundaries; humans own oversight, approvals and final quality.
 - `warden/agent.py`       Agent contract; agents RETURN staged outputs, never write the store
 - `warden/policy.py`      pre/post guardrail interface + YAML rule engine (`policies/default.yaml`)
 - `warden/llm/`          LLMClient protocol; scripted, record/replay and Gemini (httpx) backends
-- `warden/agents/`       six SDLC roles with strict Pydantic output schemas + `sdlc_graph()`
+- `warden/agents/`       eight SDLC roles with strict Pydantic output schemas + the graphs
 - `warden/bundle.py`     many generated files as one artifact; policy checks each file
 - `warden/tools/`        workspace writer, scrubbed-env command runner, verify node, git, publish
 - `warden/approval.py`    human approval interface; default approver REJECTS (fail closed)

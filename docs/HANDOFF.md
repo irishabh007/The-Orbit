@@ -43,7 +43,7 @@ orchestrator can start from any point (brownfield).
 
 ## 3. Status (2026-10-30): development complete; all four .NET scenarios recorded
 
-All handoff items 1-9 are implemented and test-proven: 325 fast tests and 11 slow ones, with ruff and
+All handoff items 1-9 are implemented and test-proven: 344 fast tests and 11 slow ones, with ruff and
 mypy clean. For what exists and why, see `docs/ARCHITECTURE.md` and
 `docs/ENGINEERING_SUMMARY.md`, which also lists the 20 defects found by real runs and environment probes.
 

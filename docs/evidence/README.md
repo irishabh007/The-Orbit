@@ -36,6 +36,10 @@ cover the recorded path only, not abandoned recording attempts. Greenfield's MTT
   .NET solution with no dependency on Warden (`dotnet test tests`).
 - **brownfield [`impact.json`](brownfield/impact.json) and [`change.diff`](brownfield/change.diff)**:
   the grounded impact analysis the human signed off, and the resulting change to the existing code.
+- **harden [`review.json`](harden/review.json), [`change.diff`](harden/change.diff) and
+  [`repo/`](harden/repo/)**: the final consistency review, the fix to the existing app, and the
+  hardened project (52/52 with `dotnet test tests`). The first review's two blocking findings are in
+  `events.jsonl` (the reviewer's `REPLAN` event).
 - **`commit-message.txt`**: the generated repo's commit. It lists the approvals and ends with
   `Warden-Audit-Head: <seq> <hash>`, which ties the code to the exact audit-log state.
 

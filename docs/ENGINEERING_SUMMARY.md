@@ -19,6 +19,11 @@ test-proven before the next:
 5. **Agents and tools:** strict schemas with grounding checks, verify by actually running the
    generated tests, a codebase scanner for brownfield, publication to plain git.
 6. **Scenarios, report, docs:** each built on the previous layers.
+7. **Real runs, then hardening:** four scenarios recorded with the real model on .NET; every defect
+   those runs exposed was fixed with a regression test (lessons below). An external review then
+   found two bugs in the generated output that all tests had passed, which led to the consistency
+   review, approval roles with separation of duties, and non-blocking approvals; Warden then fixed
+   its own bugs in the recorded `harden` run.
 
 Two principles shaped most decisions:
 - **Agents propose, the orchestrator disposes.** Agents return staged outputs; nothing reaches the
@@ -33,14 +38,14 @@ Two principles shaped most decisions:
 | Artifact | Where |
 |---|---|
 | Orchestrator and governance core | `warden/` (~3,600 lines, standard library + PyYAML) |
-| Agents (7 roles), LLM adapters, tools | `warden/agents`, `warden/llm`, `warden/tools` |
+| Agents (8 roles), LLM adapters, tools | `warden/agents`, `warden/llm`, `warden/tools` |
 | Policy | `policies/default.yaml` |
 | Demo runner, scenarios, failure demos | `run_demo.py`, `demo/` |
 | Recorded real-model runs | `recordings/`: greenfield, brownfield, ambiguous, harden (.NET; 14, 10, 23 and 19 calls) and greenfield-python (12), gemini-3.8-flash |
 | Generated URL shortener (per run) | `runs/greenfield/repo`: ASP.NET Core + xUnit, 23 files, ~2,000 lines, 31 passing tests |
 | Committed evidence | `docs/evidence/`: reports, audit logs, specs, designs, the generated repo, the brownfield diff |
 | Per-run evidence | `runs/<scenario>/events.jsonl`, `report.md`, `metrics.json`, `spec.json`, `design.json`, `verify_report.json`, `release_review.json` |
-| Tests | `tests/`: 325 fast + 11 slow (including real dotnet build/test) |
+| Tests | `tests/`: 344 fast + 11 slow (including real dotnet build/test) |
 | Docs | `README.md`, `docs/` |
 
 ## Risks, trade-offs and how they are validated

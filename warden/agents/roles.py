@@ -1,4 +1,4 @@
-"""The six SDLC roles. Prompts are deliberately explicit: they are part of the contract.
+"""The SDLC roles. Prompts are deliberately explicit: they are part of the contract.
 
 Planner is merged into Architect (see HANDOFF): the design carries the task plan,
 with every task traced to requirement ids and sequenced by ``depends_on``.
